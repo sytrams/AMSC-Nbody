@@ -1,18 +1,25 @@
-#ifndef PARTICLE_HPP
-#define PARTICLE_HPP
-#include "vector.hpp"
-#include <vector>
-#define G 6.67e-11  //gravitational constant
-#define K 8.99e-9 //Coulomb constant
+module;
+
+#include <string>
+#include <iostream>
+#include <array>
+#include <cstring>
+
+export module particle;
+
+import vector;
+
+export inline constexpr double G = 6.67e-11;  // gravitational constant
+export inline constexpr double K = 8.99e-9;   // Coulomb constant
 
 /*Define the Particle class template
 Each particle has a name, mass, an initial position, and an initial velocity
 Position and velocity are then updated according to the forces applied on the particle, using Verlet's method*/
 
-template <int DIM>
+export template <int DIM>
 class Particle{
     private:
-        std::string name;
+        std::array<char, 64> name_;
         bool is_setup;
         double mass_;
         Vector<DIM> position_;
@@ -22,13 +29,15 @@ class Particle{
 
         Particle(){};
 
-        Particle (std::string name, double mass, Vector<DIM> initial_position, Vector<DIM> initial_velocity):
-            name(name),
+        Particle (const char* name, double mass, Vector<DIM> initial_position, Vector<DIM> initial_velocity):
             mass_(mass),
             position_(initial_position),
             velocity_(initial_velocity),
             is_setup(false)
-        {};
+        {
+            std::strncpy(name_.data(), name, name_.size() - 1);
+            name_[name_.size() - 1] = '\0';
+        };
 
         double mass(){
             return mass_;
@@ -60,7 +69,7 @@ class Particle{
 
         //Print particle information
         inline friend std::ostream &operator<<(std::ostream& stream, Particle<DIM> particle){
-            stream << particle.name
+            stream << particle.name_.data()
                 << ": mass: " << particle.mass_
                 << ", position: " << particle.position_
                 << " velocity: " << particle.velocity_ << ";";
@@ -73,4 +82,3 @@ class Particle{
         
 };
 
-#endif

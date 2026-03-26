@@ -7,17 +7,16 @@
 #include <string>
 #include <cassert>
 #include <functional>
+#include <cstring>
 
-#include "particle.hpp"
-#include "vector.hpp"
-#include "system.hpp"
-
-
+import particle;
+import vector;
+import system;
 
 //this function creates a 2D gravitation_system from file data
 auto sys2(std::ifstream *file) {
 	gravitation_system<2> sys;
-	std::string name;
+	char name[64];
 	double mass, pos_x, pos_y, vel_x, vel_y;
 
 	while (*file >> name >> mass >> pos_x >> pos_y >> vel_x >> vel_y) {
@@ -32,7 +31,7 @@ auto sys2(std::ifstream *file) {
  //this function creates a 3D gravitation_system from file data
 auto sys3(std::ifstream *file) {
 	gravitation_system<3> sys;
-	std::string name;
+	char name[64];
 	double mass, pos_x, pos_y, pos_z, vel_x, vel_y, vel_z;
 
 	while (*file >> name >> mass >> pos_x >> pos_y >> pos_z >> vel_x >> vel_y >> vel_z) {
@@ -139,23 +138,31 @@ class command_iterator{
 			total_period = atof(next());
 		}
 
-		const std::map<std::string, std::function<void()>> commands {
-			{"-h", [this](){this->help();}},
-			{"--help", [this](){this->help();}},
-			{"-f", [this](){this->set_file();}},
-			{"-s", [this](){this->set_seed();}},
-			{"-d", [this](){this->set_dimention();}},
-			{"-n", [this](){this->set_number();}},
-			{"-t", [this](){this->set_delta_t();}},
-			{"-p", [this](){this->set_period();}}
-		};
-	
 	public:
 		command_iterator(int argc, char** args) : argc(argc), args(args), i(1){};
 
 		void parse(){
-			while(has_next())
-				commands.at(next())();
+			while(has_next()) {
+				const char* option = next();
+				if (std::strcmp(option, "-h") == 0 || std::strcmp(option, "--help") == 0) {
+					help();
+				} else if (std::strcmp(option, "-f") == 0) {
+					set_file();
+				} else if (std::strcmp(option, "-s") == 0) {
+					set_seed();
+				} else if (std::strcmp(option, "-d") == 0) {
+					set_dimention();
+				} else if (std::strcmp(option, "-n") == 0) {
+					set_number();
+				} else if (std::strcmp(option, "-t") == 0) {
+					set_delta_t();
+				} else if (std::strcmp(option, "-p") == 0) {
+					set_period();
+				} else {
+					std::cerr << "Unknown option: " << option << std::endl;
+					exit(1);
+				}
+			}
 		}
 
 		unsigned int get_dim(){

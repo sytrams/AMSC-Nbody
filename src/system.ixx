@@ -1,10 +1,16 @@
-#include "particle.hpp"
-#include "vector.hpp"
+module;
+
 #include <vector>
+#include <iostream>
 #include <omp.h>
 
+export module system;
+
+import particle;
+import vector;
+
 //Define the gravitation_system class template, which manages a collection of particles (i.e. celestial bodies)
-template<int DIM>
+export template<int DIM>
 class gravitation_system{
 	private:
 		std::vector<Particle<DIM>> particles;

@@ -1,5 +1,4 @@
-#ifndef VECTOR_HPP
-#define VECTOR_HPP
+module;
 
 #include <array>
 #include <cmath>
@@ -8,8 +7,10 @@
 #include <cstddef>
 #include <cassert>
 
+export module vector;
+
 //template class VectorBase that provides storage and basic operations for vectors of arbitrary dimension
-template <std::size_t DIM>
+export template <std::size_t DIM>
 class VectorBase {
 protected:
     std::array<double, DIM> components_;
@@ -94,7 +95,7 @@ public:
 };
 
 // Primary template: Vector<DIM>
-template <std::size_t DIM>
+export template <std::size_t DIM>
 class Vector : public VectorBase<DIM> {
 public:
     using VectorBase<DIM>::VectorBase; // inherit base constructors
@@ -110,7 +111,7 @@ public:
 };
 
 // Specialization for 2D with convenient constructors and accessors
-template <>
+export template <>
 class Vector<2> : public VectorBase<2> {
 public:
     using VectorBase<2>::VectorBase;
@@ -132,7 +133,7 @@ public:
 };
 
 // Specialization for 3D (simple)
-template <>
+export template <>
 class Vector<3> : public VectorBase<3> {
 public:
     using VectorBase<3>::VectorBase;
@@ -157,17 +158,16 @@ public:
 
 // free operators (generic)
 
-template <std::size_t DIM>
+export template <std::size_t DIM>
 inline Vector<DIM> operator+(Vector<DIM> a, const Vector<DIM>& b) { a += b; return a; } // addition
-template <std::size_t DIM>
+export template <std::size_t DIM>
 inline Vector<DIM> operator-(Vector<DIM> a, const Vector<DIM>& b) { a -= b; return a; } // subtraction
-template <std::size_t DIM>
+export template <std::size_t DIM>
 inline Vector<DIM> operator*(Vector<DIM> a, double s) { a *= s; return a; } // scalar multiplication
-template <std::size_t DIM>
+export template <std::size_t DIM>
 inline Vector<DIM> operator*(double s, Vector<DIM> a) { a *= s; return a; } // scalar multiplication
-template <std::size_t DIM>
+export template <std::size_t DIM>
 inline Vector<DIM> operator/(Vector<DIM> a, double s) { a /= s; return a; } // scalar division
 
 extern template class Vector<2>;
 extern template class Vector<3>;
-#endif 
