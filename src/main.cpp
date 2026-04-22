@@ -8,6 +8,7 @@
 #include <cassert>
 #include <functional>
 #include <cstring>
+#include <cstdlib>
 
 import particle;
 import vector;
@@ -264,4 +265,3 @@ int main(int argc, char **args){
 
 	return 0;
 }
-

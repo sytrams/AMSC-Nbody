@@ -1,10 +1,8 @@
-/*#include <gtest/gtest.h>
-#include "../src/vector.hpp"
-#include <cmath>*/
+#include <gtest/gtest.h>
+#include <cmath>
+#include <utility>
 
-import <gtest/gtest.h>;
-import ../src/vector
-import <cmath>;
+import vector;
 
 // Test 1: Costruttore Vector<2> e accesso x(), y()
 TEST(VectorTest, Constructor2D) {
