@@ -5,94 +5,51 @@ module;
 #include <array>
 #include <cstring>
 #include <utility>
+#include <fstream>
+#include <memory>
 
 export module particle;
-
-import vector;
 
 export inline constexpr double G = 6.67e-11;  // gravitational constant
 export inline constexpr double K = 8.99e-9;   // Coulomb constant
 
-/*Define the Particle class template
-Each particle has a name, mass, an initial position, and an initial velocity
-Position and velocity are then updated according to the forces applied on the particle, using Verlet's method*/
-
-export template <int DIM>
-class Particle{
-    private:
-        std::array<char, 64> name_;
-        bool is_setup;
-        double mass_;
-        Vector<DIM> position_;
-        Vector<DIM> old_position_;
-        Vector<DIM> velocity_;
+export class Particle{
     public:
-
-        Particle()
-            : name_{},
-              is_setup(false),
-              mass_(0.0),
-              position_{},
-              old_position_{},
-              velocity_{}
-        {}
-
-        Particle (const char* name, double mass, Vector<DIM> initial_position, Vector<DIM> initial_velocity):
-            name_{},
-            is_setup(false),
-            mass_(mass),
-            position_(std::move(initial_position)),
-            old_position_{},
-            velocity_(std::move(initial_velocity))
-        {
-            std::strncpy(name_.data(), name, name_.size() - 1);
-            name_[name_.size() - 1] = '\0';
+        uint64_t num_particles;
+        std::unique_ptr<double[]> x, y, z;
+        std::unique_ptr<double[]> vx, vy, vz;
+        std::unique_ptr<double[]> mass;
+    explicit Particle(std::ifstream& inFile)
+    {
+        if (!inFile.is_open() || !inFile.good()){
+            throw std::runtime_error("Invalid or unreadable file stream provided.");
         }
 
-        double mass() const{
-            return mass_;
+        inFile.read(reinterpret_cast<char*>(&num_particles), sizeof(uint64_t));
+        if (num_particles == 0){
+            throw std::runtime_error("Particle count is zero.");
         }
-
-        double operator [](std::size_t i){return this->position[i];}
-
-        //Update of position (and velocity) with Verlet integration
-        void update(const Vector<DIM> &acceleration, double delta_t){
-            if (!is_setup){
-                is_setup = true;
-                old_position_=position_;
-                position_+=velocity_*delta_t + 0.5*acceleration*delta_t*delta_t;
-            }
-            else{
-                Vector<DIM> temp = position_;
-                position_= 2*position_ - old_position_ +acceleration*delta_t*delta_t;
-                old_position_=temp;
-            }
-            // Euler method update (simple but less accurate)
-            // velocity_+= acceleration* delta_t;
-            // position_+= velocity_ * delta_t;
-        }
-
-        //Compute gravitational acceleration exerted by another particle
-        Vector<DIM> acceleration(const Particle& other) const{
-            Vector<DIM> direction = other.position_ - this->position_;
-            double distance = direction.norm();
-            if (distance == 0.0)
-                return {};
-            Vector<DIM> a = ((G*other.mass_)/(distance*distance*distance)) * direction;
-            return a;
-        }
-
-        //Print particle information
-        inline friend std::ostream &operator<<(std::ostream& stream, const Particle<DIM> &particle){
-            stream << particle.name_.data()
-                << ": mass: " << particle.mass_
-                << ", position: " << particle.position_
-                << " velocity: " << particle.velocity_ << ";";
-            return stream;
-        }
-
-        const Vector<DIM>& get_position() const{
-            return position_;
-        }
+        x = std::make_unique<double[]>(num_particles);
+        y = std::make_unique<double[]>(num_particles);
+        z = std::make_unique<double[]>(num_particles);
+        vx = std::make_unique<double[]>(num_particles);
+        vy = std::make_unique<double[]>(num_particles);
+        vz = std::make_unique<double[]>(num_particles);
+        mass = std::make_unique<double[]>(num_particles);
         
+        size_t bytes_to_read = num_particles * sizeof(double);
+        
+        inFile.read(reinterpret_cast<char*>(x.get()), bytes_to_read);
+        inFile.read(reinterpret_cast<char*>(y.get()), bytes_to_read);
+        inFile.read(reinterpret_cast<char*>(z.get()), bytes_to_read);
+        inFile.read(reinterpret_cast<char*>(vx.get()), bytes_to_read);
+        inFile.read(reinterpret_cast<char*>(vy.get()), bytes_to_read);
+        inFile.read(reinterpret_cast<char*>(vz.get()), bytes_to_read);
+        inFile.read(reinterpret_cast<char*>(mass.get()), bytes_to_read);
+
+        // 5. Final validation to ensure the file didn't end prematurely
+        if (!inFile) {
+            throw std::runtime_error("Failed to read all expected particle data. File may be truncated.");
+        }
+    }
 };
