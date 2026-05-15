@@ -35,3 +35,14 @@ build/
 #vscode
 .vscode
 compile_commands.json
+data/globular_heart.bin
+.DS_Store
+data/globular_smile.bin
+data/milky_way_like_5M.bin
+data/milky_way_like_100M.bin
+data/spiral_3arms.bin
+data/test_globular.bin
+data/test_spiral.bin
+
+#input files
+*.bin
