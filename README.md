@@ -93,6 +93,42 @@ make run args = "[options]"
 ```
 The default option to execute with simple ```make run``` command is ```-f ../src/solar_system.txt``` that give to the simulaton the initilizarion for our Solar System.
 
+## Generate Galaxy Data
+The script [data/generate_galaxy.py](/Users/wedoi/Documents/AMSC-nbody/AMSC-Nbody/data/generate_galaxy.py:1) creates synthetic binary datasets for the galaxy viewer and the large-particle loader.
+
+Run it from the project root with:
+```bash
+python3 data/generate_galaxy.py --galaxy spiral -n 100000 -o data/milky_way_like.bin
+```
+
+Available options:
+- ```--galaxy globular|spiral``` selects the base galaxy type.
+- ```--shape natural|heart|smile``` changes the projected XY shape. The default is ```natural```.
+- ```--num-arms N``` sets the number of spiral arms when ```--galaxy spiral``` is used. The default is ```4```.
+- ```-n``` or ```--num-particles``` sets the particle count.
+- ```-o``` or ```--output``` sets the output binary file path.
+- ```--seed``` makes the generated dataset reproducible.
+
+Examples:
+```bash
+python3 data/generate_galaxy.py --galaxy spiral --num-arms 3 -n 5000000 -o data/milky_way_like_5M.bin
+python3 data/generate_galaxy.py --galaxy globular --shape heart -n 100000 -o data/globular_heart.bin
+python3 data/generate_galaxy.py --galaxy spiral --shape smile -n 100000 -o data/spiral_smile.bin
+```
+
+Binary format:
+- the first 8 bytes are the number of particles stored as little-endian ```uint64```
+- then all ```x``` coordinates
+- then all ```y``` coordinates
+- then all ```z``` coordinates
+- then all ```vx``` coordinates
+- then all ```vy``` coordinates
+- then all ```vz``` coordinates
+
+Each coordinate and velocity component is written as little-endian ```double```.
+
+Use a writable output path such as ```data/file.bin```. A path like ```/data/file.bin``` points to a root-level directory and will usually fail with a permission error.
+
 ## External tool
 We have and external script writing in python to export an image of the plot about our simulation.
 
@@ -115,6 +151,5 @@ The Verlet method, thanks to its time-symmetric structure, is much more stable, 
 •	Euler: local error of order 1 → global error O(Δt)
 
 •	Verlet: local error of order 2 → global error O(Δt²)
-
 
 
