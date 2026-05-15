@@ -47,7 +47,7 @@ protected:
 
 TEST_F(MilkyWayTest, LoadDataCorrectly) {
     std::ifstream inFile(test_file, std::ios::binary);
-    MilkyWayParticles mw(inFile);
+    Particles mw(inFile);
 
     EXPECT_EQ(mw.num_particles, 2);
     EXPECT_DOUBLE_EQ(mw.x[0], 1.0);
@@ -61,14 +61,14 @@ TEST_F(MilkyWayTest, LoadDataCorrectly) {
 
 TEST_F(MilkyWayTest, ThrowsOnInvalidFile) {
     std::ifstream inFile("non_existent_mw.bin", std::ios::binary);
-    EXPECT_THROW(MilkyWayParticles mw(inFile), std::runtime_error);
+    EXPECT_THROW(Particles mw(inFile), std::runtime_error);
 }
 
 TEST_F(MilkyWayTest, LoadDataCorrectlyWithUInt64Header) {
     write_planar_file(true);
 
     std::ifstream inFile(test_file, std::ios::binary);
-    MilkyWayParticles mw(inFile);
+    Particles mw(inFile);
 
     EXPECT_EQ(mw.num_particles, 2);
     EXPECT_DOUBLE_EQ(mw.x[0], 1.0);
