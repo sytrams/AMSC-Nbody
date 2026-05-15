@@ -2,14 +2,7 @@ module;
 
 #include <string>
 #include <iostream>
-#include <array>
-#include <cstdint>
-#include <cstring>
-#include <utility>
 #include <fstream>
-#include <memory>
-#include <vector>
-#include <limits>
 
 export module particle;
 
