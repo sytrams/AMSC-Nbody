@@ -23,7 +23,7 @@ ParticleFileHeader detect_particle_file_header(std::ifstream& inFile) {
         throw std::runtime_error("Failed to determine particle file size.");
     }
 
-    constexpr std::streamoff bytes_per_particle = static_cast<std::streamoff>(6 * sizeof(double));
+    constexpr std::streamoff bytes_per_particle = static_cast<std::streamoff>(7 * sizeof(double));
 
     inFile.seekg(0, std::ios::beg);
     uint64_t count64 = 0;

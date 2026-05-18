@@ -13,6 +13,7 @@ protected:
     void write_planar_file(bool use_64_bit_header) {
         uint32_t num_particles = 2;
         uint64_t num_particles_64 = num_particles;
+        std::vector<double> mass = {1.5e30, 2.5e30};
         std::vector<double> x = {1.0, 2.0};
         std::vector<double> y = {3.0, 4.0};
         std::vector<double> z = {5.0, 6.0};
@@ -26,6 +27,7 @@ protected:
         } else {
             outFile.write(reinterpret_cast<char*>(&num_particles), sizeof(uint32_t));
         }
+        outFile.write(reinterpret_cast<char*>(mass.data()), mass.size() * sizeof(double));
         outFile.write(reinterpret_cast<char*>(x.data()), x.size() * sizeof(double));
         outFile.write(reinterpret_cast<char*>(y.data()), y.size() * sizeof(double));
         outFile.write(reinterpret_cast<char*>(z.data()), z.size() * sizeof(double));
@@ -50,6 +52,8 @@ TEST_F(MilkyWayTest, LoadDataCorrectly) {
     Particles mw(inFile);
 
     EXPECT_EQ(mw.num_particles, 2);
+    EXPECT_DOUBLE_EQ(mw.mass[0], 1.5e30);
+    EXPECT_DOUBLE_EQ(mw.mass[1], 2.5e30);
     EXPECT_DOUBLE_EQ(mw.x[0], 1.0);
     EXPECT_DOUBLE_EQ(mw.x[1], 2.0);
     EXPECT_DOUBLE_EQ(mw.y[0], 3.0);
@@ -71,6 +75,7 @@ TEST_F(MilkyWayTest, LoadDataCorrectlyWithUInt64Header) {
     Particles mw(inFile);
 
     EXPECT_EQ(mw.num_particles, 2);
+    EXPECT_DOUBLE_EQ(mw.mass[0], 1.5e30);
     EXPECT_DOUBLE_EQ(mw.x[0], 1.0);
     EXPECT_DOUBLE_EQ(mw.y[1], 4.0);
     EXPECT_DOUBLE_EQ(mw.z[0], 5.0);

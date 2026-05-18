@@ -118,6 +118,7 @@ python3 data/generate_galaxy.py --galaxy spiral --shape smile -n 100000 -o data/
 
 Binary format:
 - the first 8 bytes are the number of particles stored as little-endian ```uint64```
+- then all ```mass``` components
 - then all ```x``` coordinates
 - then all ```y``` coordinates
 - then all ```z``` coordinates

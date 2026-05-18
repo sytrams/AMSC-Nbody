@@ -27,7 +27,7 @@ ViewerFileHeader detect_viewer_file_header(std::ifstream& inFile) {
         throw std::runtime_error("Failed to determine viewer file size.");
     }
 
-    constexpr std::streamoff bytes_per_particle = static_cast<std::streamoff>(6 * sizeof(double));
+    constexpr std::streamoff bytes_per_particle = static_cast<std::streamoff>(7 * sizeof(double));
 
     inFile.seekg(0, std::ios::beg);
     uint64_t n64 = 0;
@@ -102,9 +102,10 @@ public:
         z = std::make_unique<double[]>(num_particles);
 
         inFile.clear();
-        inFile.seekg(header.header_bytes, std::ios::beg);
+        inFile.seekg(header.header_bytes, std::ios::beg); inFile.seekg(num_particles * sizeof(double), std::ios::cur);
 
         size_t bytes = num_particles * sizeof(double);
+        inFile.seekg(bytes, std::ios::cur);
         inFile.read(reinterpret_cast<char*>(x.get()), bytes);
         inFile.read(reinterpret_cast<char*>(y.get()), bytes);
         inFile.read(reinterpret_cast<char*>(z.get()), bytes);
