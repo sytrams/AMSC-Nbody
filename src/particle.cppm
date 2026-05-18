@@ -52,6 +52,7 @@ ParticleFileHeader detect_particle_file_header(std::ifstream& inFile) {
 export class Particles {
 public:
     uint32_t num_particles;
+    std::unique_ptr<double[]> mass;
     std::unique_ptr<double[]> x, y, z;
     std::unique_ptr<double[]> vx, vy, vz;
 
@@ -66,6 +67,7 @@ public:
             throw std::runtime_error("Particle count is zero.");
         }
 
+        mass = std::make_unique<double[]>(num_particles);
         x = std::make_unique<double[]>(num_particles);
         y = std::make_unique<double[]>(num_particles);
         z = std::make_unique<double[]>(num_particles);
@@ -77,6 +79,7 @@ public:
         inFile.seekg(header.header_bytes, std::ios::beg);
 
         size_t bytes_to_read = num_particles * sizeof(double);
+        inFile.read(reinterpret_cast<char*>(mass.get()), bytes_to_read);
         inFile.read(reinterpret_cast<char*>(x.get()), bytes_to_read);
         inFile.read(reinterpret_cast<char*>(y.get()), bytes_to_read);
         inFile.read(reinterpret_cast<char*>(z.get()), bytes_to_read);
