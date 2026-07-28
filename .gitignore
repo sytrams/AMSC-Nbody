@@ -43,6 +43,7 @@ data/milky_way_like_100M.bin
 data/spiral_3arms.bin
 data/test_globular.bin
 data/test_spiral.bin
+external/
 *ssh*
 
 #input files
