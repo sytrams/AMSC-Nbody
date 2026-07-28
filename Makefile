@@ -23,13 +23,17 @@ GTEST_PREFIX = /opt/homebrew/opt/googletest
 GTEST_CPPFLAGS = -I$(GTEST_PREFIX)/include
 GTEST_LDFLAGS = -L$(GTEST_PREFIX)/lib -lgtest -lpthread
 
+CCCL_ROOT ?= $(CURDIR)/external/cccl
+PROJECT_CPPFLAGS = -I$(CURDIR) -I$(CURDIR)/include
+CCCL_CPPFLAGS = -I$(CCCL_ROOT)/libcudacxx/include -I$(CCCL_ROOT)/thrust -I$(CCCL_ROOT)/cub -I$(CCCL_ROOT)/cudax/include
+
 UNAME_S := $(shell uname -s)
 
 ifeq ($(UNAME_S),Darwin)
 	CXX := /opt/homebrew/opt/llvm@18/bin/clang++
 	SDKROOT ?= $(shell xcrun --show-sdk-path)
 	OMP_PREFIX ?= /opt/homebrew/opt/libomp
-	CXXFLAGS = -std=c++23 -stdlib=libc++ -fopenmp -I$(OMP_PREFIX)/include -isysroot $(SDKROOT)
+	CXXFLAGS = -std=c++23 -stdlib=libc++ -fopenmp -I$(OMP_PREFIX)/include $(PROJECT_CPPFLAGS) $(CCCL_CPPFLAGS) -isysroot $(SDKROOT)
 	LDFLAGS = -stdlib=libc++ -L$(OMP_PREFIX)/lib -Wl,-rpath,$(OMP_PREFIX)/lib -fopenmp
 	METAL_FLAGS = -framework Metal -framework MetalKit -framework Cocoa -framework QuartzCore
 	
@@ -40,7 +44,7 @@ ifeq ($(UNAME_S),Darwin)
 	main_imports = $(tree_imports)
 else
 	CXX ?= g++
-	CXXFLAGS = -std=c++23 -fmodules-ts -fopenmp
+	CXXFLAGS = -std=c++23 -fmodules-ts -fopenmp $(PROJECT_CPPFLAGS) $(CCCL_CPPFLAGS)
 	LDFLAGS = -fopenmp
 endif
 
