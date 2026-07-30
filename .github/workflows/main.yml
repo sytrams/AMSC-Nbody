@@ -10,71 +10,84 @@ jobs:
   deploy:
     runs-on: ubuntu-24.04
     steps:
-      # Checkout the repository
       - name: Checkout Code
         uses: actions/checkout@v6
 
       - name: Install dependencies
         run: |
+          set -euo pipefail
           wget https://github.com/sylabs/singularity/releases/download/v4.4.2/singularity-ce_4.4.2-noble_amd64.deb
-          sudo apt install ./singularity-ce_4.4.2-noble_amd64.deb
-          sudo add-apt-repository ppa:yuezk/globalprotect-openconnect
+          sudo apt-get install -y ./singularity-ce_4.4.2-noble_amd64.deb
+          sudo add-apt-repository -y ppa:yuezk/globalprotect-openconnect
           sudo apt-get update
-          sudo apt-get install globalprotect-openconnect
+          sudo apt-get install -y globalprotect-openconnect
                   
       # - name: Build the container
       #   run: singularity build --fakeroot singularity.sif Singularity.def
 
-      - name: Start ssh-agent and load key
-        env:
-          SSH_PRIV: ${{ secrets.SSH_PRIV }}
-        run: |
-          eval "$(ssh-agent -s)"
-          printf '%s\n' "$SSH_PRIV" | tr -d '\r' | ssh-add -
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
-
       - name: Install Python deps
         run: |
+          python3 -m pip install --upgrade pip
           python3 -m pip install -r requirements.txt
-          playwright install chromium
 
-      - name: Connect VPN
+      - name: Connect VPN And Verify Cluster Access
         env:
           PORTAL: ${{ secrets.PORTAL }}
           POLIMI_USERNAME: ${{ secrets.USERNAME }}
           POLIMI_PASSWORD: ${{ secrets.PASSWORD }}
           POLIMI_OTP_SECRET: ${{ secrets.OTP_KEY_GEN }}
+          POLIMI_CLUSTER_USER: ${{ secrets.USERNAME }}
+          POLIMI_CLUSTER_HOST: 10.78.18.100
+          SSH_PRIV: ${{ secrets.SSH_PRIV }}
+          GPAUTH_FIX_OPENSSL: "1"
+          GPCLIENT_FIX_OPENSSL: "1"
         run: |
-          coproc GP { stdbuf -oL -eL sudo gpclient connect --browser remote "$PORTAL" 2>&1; }
+          set -euo pipefail
 
-          LINK=""
-          while IFS= read -r line <&"${GP[0]}"; do
-            printf '%s\n' "$line" >&2
-            if [[ $line =~ https?://[^[:space:]]+ ]]; then
-              LINK="${BASH_REMATCH[0]}"
+          eval "$(ssh-agent -s)"
+          trap 'sudo gpclient disconnect || true; ssh-agent -k >/dev/null || true' EXIT
+
+          printf '%s\n' "$SSH_PRIV" | tr -d '\r' | ssh-add -
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+          COOKIE="$(python3 vpn_remote_auth.py --portal "$PORTAL" --print-cookie-only)"
+
+          coproc GPCLIENT { stdbuf -oL -eL sudo gpclient --fix-openssl connect "$PORTAL" --cookie-on-stdin 2>&1; }
+          tee /tmp/gpclient.log <&"${GPCLIENT[0]}" >&2 &
+          GPCLIENT_LOG_PID=$!
+
+          printf '%s\n' "$COOKIE" >&"${GPCLIENT[1]}"
+          GPCLIENT_STDIN_FD="${GPCLIENT[1]}"
+          eval "exec ${GPCLIENT_STDIN_FD}>&-"
+
+          for attempt in $(seq 1 30); do
+            if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
+              "$POLIMI_CLUSTER_USER@$POLIMI_CLUSTER_HOST" 'hostname' > /tmp/cluster-hostname.txt 2> /tmp/cluster-ssh.log; then
               break
             fi
+
+            if ! kill -0 "$GPCLIENT_PID" 2>/dev/null; then
+              echo "gpclient exited before SSH became reachable." >&2
+              cat /tmp/cluster-ssh.log >&2 || true
+              exit 1
+            fi
+
+            sleep 2
           done
 
-          if [[ -z "$LINK" ]]; then
-            echo "Failed to capture gpclient login URL" >&2
+          if [[ ! -s /tmp/cluster-hostname.txt ]]; then
+            echo "VPN came up, but SSH to the cluster host never succeeded." >&2
+            cat /tmp/cluster-ssh.log >&2 || true
             exit 1
           fi
 
-          echo "$LINK"
-          curl -v "$LINK"
-          ss -ltn | grep 33601
+          echo "Cluster login node:"
+          cat /tmp/cluster-hostname.txt
 
-          CALLBACK="$(python3 vpn_remote_auth.py "$LINK")"
-
-          if [[ "$CALLBACK" != globalprotectcallback:* ]]; then
-            echo "Invalid callback returned: $CALLBACK" >&2
-            exit 1
-          fi
-
-          printf '%s\n' "$CALLBACK" >&"${GP[1]}"
-          wait "$COPROC_PID"
+          sudo gpclient disconnect || true
+          wait "$GPCLIENT_PID" || true
+          kill "$GPCLIENT_LOG_PID" || true
           
       
       - name: Archive valid_data.csv
@@ -82,10 +95,12 @@ jobs:
         with:
           path: results/valid_data.csv
           archive: false
+          if-no-files-found: ignore
 
       - name: Archive alarm.log
         uses: actions/upload-artifact@v7
         with:
           path: results/alarms.log
           archive: false
+          if-no-files-found: ignore
           

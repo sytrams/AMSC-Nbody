@@ -21,8 +21,10 @@ POLIMI_OTP_SECRET = _env("POLIMI_OTP_SECRET", "CINECA_OTP_SECRET", required=Fals
 PORTAL = _env("PORTAL", required=False)
 LINK = _env("LINK", required=False)
 
+GPAUTH_BIN = _env("GPAUTH_BIN", default="gpauth", required=False)
 GPCLIENT_BIN = _env("GPCLIENT_BIN", default="gpclient", required=False)
 GPCLIENT_USE_SUDO = _env("GPCLIENT_USE_SUDO", default="1", required=False) != "0"
+GPAUTH_FIX_OPENSSL = _env("GPAUTH_FIX_OPENSSL", default="0", required=False) == "1"
 GPCLIENT_FIX_OPENSSL = _env("GPCLIENT_FIX_OPENSSL", default="0", required=False) == "1"
 
 REQUEST_TIMEOUT_SECONDS = int(_env("REQUEST_TIMEOUT_SECONDS", default="20", required=False))
