@@ -339,6 +339,11 @@ def fill_otp_payload(form: HtmlForm, otp_code: str) -> dict[str, str]:
 
 
 def extract_auth_data(response: requests.Response) -> str:
+    parser = parse_forms(response.text)
+
+    if parser.meta_refresh_url and parser.meta_refresh_url.startswith("globalprotectcallback:"):
+        return parser.meta_refresh_url
+
     direct_match = CALLBACK_RE.search(response.url)
     if direct_match:
         return direct_match.group(0)
@@ -361,8 +366,6 @@ def extract_auth_data(response: requests.Response) -> str:
     query_code = parse_qs(parsed_url.query).get("code")
     if query_code:
         return query_code[0]
-
-    parser = parse_forms(response.text)
 
     for form in parser.forms:
         for name, value in form.inputs.items():
@@ -423,7 +426,11 @@ def advance_to_interactive_page(session: requests.Session, response: requests.Re
         debug_dump_response(f"interactive_step_{step}", response)
         parser = parse_forms(response.text)
 
-        if pick_login_form(parser.forms) or pick_otp_form(parser.forms):
+        if (
+            pick_login_form(parser.forms)
+            or pick_otp_form(parser.forms)
+            or (parser.meta_refresh_url or "").startswith("globalprotectcallback:")
+        ):
             if step > 1:
                 log(f"Reached interactive page after {step - 1} redirect step(s): {response.url}")
             return response
@@ -447,7 +454,12 @@ def advance_to_interactive_page(session: requests.Session, response: requests.Re
 
 
 def page_has_callback(response: requests.Response) -> bool:
-    return CALLBACK_RE.search(response.url) is not None or CALLBACK_RE.search(response.text) is not None
+    parser = parse_forms(response.text)
+    return (
+        CALLBACK_RE.search(response.url) is not None
+        or CALLBACK_RE.search(response.text) is not None
+        or (parser.meta_refresh_url or "").startswith("globalprotectcallback:")
+    )
 
 
 def page_looks_like_otp(response: requests.Response) -> bool:
