@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import argparse
+import json
+import os
 import re
 import sys
 from dataclasses import dataclass, field
 from html.parser import HTMLParser
+from pathlib import Path
 from subprocess import PIPE, Popen, run
 from typing import Iterable
 from urllib.parse import parse_qs, unquote, urljoin, urlparse
@@ -26,6 +29,7 @@ OTP_HINT_RE = re.compile(
     re.IGNORECASE,
 )
 OTP_FIELD_TOKENS = ("otp", "totp", "code", "token", "passcode", "pin", "verify", "verification")
+TITLE_RE = re.compile(r"<title>(.*?)</title>", re.IGNORECASE | re.DOTALL)
 
 
 @dataclass
@@ -89,6 +93,91 @@ class FormParser(HTMLParser):
 
 def log(message: str) -> None:
     print(message, file=sys.stderr, flush=True)
+
+
+DEBUG_DIR = Path(os.environ.get("VPN_DEBUG_DIR", "/tmp/vpn-debug"))
+DEBUG_ENABLED = os.environ.get("VPN_DEBUG", "1") != "0"
+DEBUG_COUNTER = 0
+
+
+def debug_path(name: str) -> Path:
+    DEBUG_DIR.mkdir(parents=True, exist_ok=True)
+    return DEBUG_DIR / name
+
+
+def extract_title(html: str) -> str | None:
+    match = TITLE_RE.search(html)
+    if not match:
+        return None
+    return " ".join(match.group(1).split())
+
+
+def summarize_forms(forms: Iterable[HtmlForm]) -> list[dict[str, object]]:
+    summary: list[dict[str, object]] = []
+    for index, form in enumerate(forms, start=1):
+        summary.append(
+            {
+                "index": index,
+                "id": form.attrs.get("id", ""),
+                "class": form.attrs.get("class", ""),
+                "method": form.method,
+                "action": form.action,
+                "inputs": sorted(form.inputs.keys()),
+            }
+        )
+    return summary
+
+
+def debug_dump_response(label: str, response: requests.Response) -> None:
+    global DEBUG_COUNTER
+    parser = parse_forms(response.text)
+    title = extract_title(response.text)
+    merged_text = " ".join(parser.text_parts)
+    text_snippet = merged_text[:400]
+    forms_summary = summarize_forms(parser.forms)
+
+    log(
+        f"[debug] {label}: status={response.status_code} url={response.url} "
+        f"title={title!r} forms={len(forms_summary)} "
+        f"login_form={'yes' if pick_login_form(parser.forms) else 'no'} "
+        f"otp_form={'yes' if pick_otp_form(parser.forms) else 'no'} "
+        f"auto_form={'yes' if pick_auto_submit_form(parser.forms) else 'no'} "
+        f"meta_refresh={parser.meta_refresh_url or '-'}"
+    )
+    if text_snippet:
+        log(f"[debug] {label}: text-snippet={text_snippet!r}")
+    for form_info in forms_summary:
+        log(
+            "[debug] "
+            f"{label}: form#{form_info['index']} id={form_info['id']!r} "
+            f"class={form_info['class']!r} method={form_info['method']!r} "
+            f"action={form_info['action']!r} inputs={form_info['inputs']!r}"
+        )
+
+    if not DEBUG_ENABLED:
+        return
+
+    DEBUG_COUNTER += 1
+    stem = f"{DEBUG_COUNTER:02d}_{label}"
+    html_path = debug_path(f"{stem}.html")
+    json_path = debug_path(f"{stem}.json")
+    html_path.write_text(response.text, encoding="utf-8")
+    json_path.write_text(
+        json.dumps(
+            {
+                "label": label,
+                "status_code": response.status_code,
+                "url": response.url,
+                "title": title,
+                "meta_refresh_url": parser.meta_refresh_url,
+                "forms": forms_summary,
+                "text_snippet": text_snippet,
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+    log(f"[debug] {label}: wrote {html_path} and {json_path}")
 
 
 def parse_forms(html: str) -> FormParser:
@@ -280,6 +369,15 @@ def extract_auth_data(response: requests.Response) -> str:
 
 def submit_form(session: requests.Session, base_url: str, form: HtmlForm, payload: dict[str, str]) -> requests.Response:
     action = urljoin(base_url, form.action or "")
+    redacted_payload = {
+        key: ("<redacted>" if any(token in key.lower() for token in ("pass", "otp", "token")) else value)
+        for key, value in payload.items()
+    }
+    log(
+        f"[debug] submitting form method={form.method} action={action} "
+        f"id={form.attrs.get('id', '')!r} payload_keys={sorted(payload.keys())!r} "
+        f"payload_preview={redacted_payload!r}"
+    )
     if form.method == "get":
         response = session.get(action, params=payload, timeout=config.REQUEST_TIMEOUT_SECONDS)
     else:
@@ -302,6 +400,7 @@ def describe_response(response: requests.Response) -> str:
 
 def advance_to_interactive_page(session: requests.Session, response: requests.Response) -> requests.Response:
     for step in range(1, 8):
+        debug_dump_response(f"interactive_step_{step}", response)
         parser = parse_forms(response.text)
 
         if pick_login_form(parser.forms) or pick_otp_form(parser.forms):
@@ -350,6 +449,7 @@ def authenticate_link(link: str) -> str:
     log(f"Loading VPN login page from {link}")
     response = session.get(link, timeout=config.REQUEST_TIMEOUT_SECONDS)
     response.raise_for_status()
+    debug_dump_response("initial_fetch", response)
     response = advance_to_interactive_page(session, response)
 
     parser = parse_forms(response.text)
@@ -363,8 +463,19 @@ def authenticate_link(link: str) -> str:
     log("Submitting PoliMi credentials")
     login_payload = fill_login_payload(login_form, username, password)
     response = submit_form(session, response.url, login_form, login_payload)
+    debug_dump_response("after_login_submit_raw", response)
     response = advance_to_interactive_page(session, response)
     log(f"Post-login page summary: {describe_response(response)}")
+
+    post_login_parser = parse_forms(response.text)
+    if pick_login_form(post_login_parser.forms) and not pick_otp_form(post_login_parser.forms) and not page_has_callback(response):
+        raise RuntimeError(
+            "The credential submission returned the Polimi login page again instead of the 2FA page. "
+            "This usually means the login identifier is wrong for the web form. "
+            "Polimi web login expects the person code (for example 10774182), while cluster SSH usually uses "
+            "u<person_code> (for example u10774182). "
+            f"Page summary: {describe_response(response)}"
+        )
 
     for attempt in range(3):
         if page_has_callback(response):
@@ -383,6 +494,7 @@ def authenticate_link(link: str) -> str:
         log(f"Submitting OTP challenge #{attempt + 1}")
         otp_payload = fill_otp_payload(otp_form, otp_code)
         response = submit_form(session, response.url, otp_form, otp_payload)
+        debug_dump_response(f"after_otp_submit_raw_{attempt + 1}", response)
         response = advance_to_interactive_page(session, response)
         log(f"Post-OTP page summary #{attempt + 1}: {describe_response(response)}")
 

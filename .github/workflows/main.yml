@@ -33,10 +33,10 @@ jobs:
       - name: Connect VPN And Verify Cluster Access
         env:
           PORTAL: ${{ secrets.PORTAL }}
-          POLIMI_USERNAME: ${{ secrets.USERNAME }}
+          POLIMI_USERNAME: ${{ secrets.POLIMI_PERSON_CODE || secrets.POLIMI_USERNAME || secrets.USERNAME }}
           POLIMI_PASSWORD: ${{ secrets.PASSWORD }}
           POLIMI_OTP_SECRET: ${{ secrets.OTP_KEY_GEN }}
-          POLIMI_CLUSTER_USER: ${{ secrets.USERNAME }}
+          POLIMI_CLUSTER_USER: ${{ secrets.POLIMI_CLUSTER_USER || secrets.USERNAME }}
           POLIMI_CLUSTER_HOST: 10.78.18.100
           SSH_PRIV: ${{ secrets.SSH_PRIV }}
           GPAUTH_FIX_OPENSSL: "1"
