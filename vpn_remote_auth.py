@@ -38,6 +38,7 @@ class HtmlForm:
     method: str = "post"
     attrs: dict[str, str] = field(default_factory=dict)
     inputs: dict[str, str] = field(default_factory=dict)
+    buttons: dict[str, str] = field(default_factory=dict)
 
 
 class FormParser(HTMLParser):
@@ -65,6 +66,12 @@ class FormParser(HTMLParser):
             name = attrs_dict.get("name")
             if name:
                 self._current_form.inputs[name] = attrs_dict.get("value", "")
+
+        if tag == "button" and self._current_form is not None:
+            name = attrs_dict.get("name")
+            button_type = attrs_dict.get("type", "").lower()
+            if name and button_type in {"", "submit"}:
+                self._current_form.buttons[name] = attrs_dict.get("value", "")
 
         if tag == "meta":
             http_equiv = attrs_dict.get("http-equiv", "").lower()
@@ -123,6 +130,7 @@ def summarize_forms(forms: Iterable[HtmlForm]) -> list[dict[str, object]]:
                 "method": form.method,
                 "action": form.action,
                 "inputs": sorted(form.inputs.keys()),
+                "buttons": sorted(form.buttons.keys()),
             }
         )
     return summary
@@ -151,7 +159,8 @@ def debug_dump_response(label: str, response: requests.Response) -> None:
             "[debug] "
             f"{label}: form#{form_info['index']} id={form_info['id']!r} "
             f"class={form_info['class']!r} method={form_info['method']!r} "
-            f"action={form_info['action']!r} inputs={form_info['inputs']!r}"
+            f"action={form_info['action']!r} inputs={form_info['inputs']!r} "
+            f"buttons={form_info['buttons']!r}"
         )
 
     if not DEBUG_ENABLED:
@@ -190,6 +199,10 @@ def _field_names(inputs: dict[str, str]) -> set[str]:
     return {name.lower() for name in inputs}
 
 
+def _button_names(buttons: dict[str, str]) -> set[str]:
+    return {name.lower() for name in buttons}
+
+
 def pick_login_form(forms: Iterable[HtmlForm]) -> HtmlForm | None:
     ranked: list[tuple[int, HtmlForm]] = []
     for form in forms:
@@ -201,6 +214,8 @@ def pick_login_form(forms: Iterable[HtmlForm]) -> HtmlForm | None:
             score += 5
         if form.attrs.get("id") == "kc-form-login":
             score += 3
+        if "evn_conferma" in _button_names(form.buttons):
+            score += 4
         action = form.action.lower()
         if "login" in action or "authenticate" in action:
             score += 2
@@ -228,6 +243,8 @@ def pick_otp_form(forms: Iterable[HtmlForm]) -> HtmlForm | None:
             score += 8
         if any(any(token in name for token in OTP_FIELD_TOKENS) for name in names):
             score += 6
+        if "evn_continua" in _button_names(form.buttons):
+            score += 4
         if any(token in form_id for token in ("otp", "mfa", "token", "verify", "twofactor")):
             score += 4
         if any(token in form_class for token in ("otp", "mfa", "token", "verify", "twofactor")):
@@ -298,6 +315,8 @@ def fill_login_payload(form: HtmlForm, username: str, password: str) -> dict[str
         payload["credentialId"] = ""
     if "rememberMe" in payload and not payload["rememberMe"]:
         payload["rememberMe"] = "on"
+    if "evn_conferma" in form.buttons:
+        payload["evn_conferma"] = form.buttons["evn_conferma"] or "evento"
 
     return payload
 
@@ -312,8 +331,8 @@ def fill_otp_payload(form: HtmlForm, otp_code: str) -> dict[str, str]:
         raise RuntimeError("Could not identify OTP field in the MFA form.")
 
     payload[otp_field] = otp_code
-    if "evn_continua" in payload and not payload["evn_continua"]:
-        payload["evn_continua"] = "evento"
+    if "evn_continua" in form.buttons:
+        payload["evn_continua"] = form.buttons["evn_continua"] or "evento"
     if "login" in payload and not payload["login"]:
         payload["login"] = "Log In"
     return payload
