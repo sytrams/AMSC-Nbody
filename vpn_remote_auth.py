@@ -128,16 +128,23 @@ def pick_otp_form(forms: Iterable[HtmlForm]) -> HtmlForm | None:
     for form in forms:
         names = _field_names(form.inputs)
         score = 0
-        if any(any(token in name for token in OTP_FIELD_TOKENS) for name in names):
-            score += 6
         form_id = form.attrs.get("id", "").lower()
         form_class = form.attrs.get("class", "").lower()
         form_action = form.action.lower()
+
+        if form_id == "form_scelta2fa":
+            score += 12
+        if "identificazionedfa.do" in form_action:
+            score += 8
+        if any(any(token in name for token in OTP_FIELD_TOKENS) for name in names):
+            score += 6
         if any(token in form_id for token in ("otp", "mfa", "token", "verify", "twofactor")):
             score += 4
         if any(token in form_class for token in ("otp", "mfa", "token", "verify", "twofactor")):
             score += 3
         if any(token in form_action for token in ("otp", "mfa", "token", "verify", "twofactor")):
+            score += 2
+        if "evn_continua" in names:
             score += 2
         if len(names) == 1 and not any("pass" in name or "user" in name for name in names):
             score += 1
@@ -215,6 +222,8 @@ def fill_otp_payload(form: HtmlForm, otp_code: str) -> dict[str, str]:
         raise RuntimeError("Could not identify OTP field in the MFA form.")
 
     payload[otp_field] = otp_code
+    if "evn_continua" in payload and not payload["evn_continua"]:
+        payload["evn_continua"] = "evento"
     if "login" in payload and not payload["login"]:
         payload["login"] = "Log In"
     return payload
