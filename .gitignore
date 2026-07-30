@@ -48,3 +48,7 @@ external/
 
 #input files
 *.bin
+
+#python
+__pycache__/
+*.pyc
