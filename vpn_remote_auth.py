@@ -37,6 +37,7 @@ class FormParser(HTMLParser):
         self._current_form: HtmlForm | None = None
         self.text_parts: list[str] = []
         self.code_like_values: list[str] = []
+        self.meta_refresh_url: str | None = None
 
     def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         attrs_dict = {key: value or "" for key, value in attrs}
@@ -54,6 +55,14 @@ class FormParser(HTMLParser):
             name = attrs_dict.get("name")
             if name:
                 self._current_form.inputs[name] = attrs_dict.get("value", "")
+
+        if tag == "meta":
+            http_equiv = attrs_dict.get("http-equiv", "").lower()
+            content = attrs_dict.get("content", "")
+            if http_equiv == "refresh":
+                match = re.search(r"url=(.+)$", content, re.IGNORECASE)
+                if match:
+                    self.meta_refresh_url = match.group(1).strip(" '\"")
 
         if tag in {"code", "pre", "strong", "b", "span", "div"}:
             value = attrs_dict.get("value")
@@ -121,6 +130,40 @@ def pick_otp_form(forms: Iterable[HtmlForm]) -> HtmlForm | None:
             score += 4
         if score:
             ranked.append((score, form))
+    if not ranked:
+        return None
+    ranked.sort(key=lambda item: item[0], reverse=True)
+    return ranked[0][1]
+
+
+def pick_auto_submit_form(forms: Iterable[HtmlForm]) -> HtmlForm | None:
+    ranked: list[tuple[int, HtmlForm]] = []
+    for form in forms:
+        names = _field_names(form.inputs)
+        if any(token in name for name in names for token in ("pass", "otp", "totp")):
+            continue
+
+        score = 0
+        if form.attrs.get("id") == "myform":
+            score += 10
+        if form.attrs.get("name") == "hiddenform":
+            score += 5
+        if names and all(
+            token not in name
+            for name in names
+            for token in ("user", "email", "login", "pass", "otp", "totp")
+        ):
+            score += 2
+        if len(names) >= 1:
+            score += 1
+
+        action = form.action.lower()
+        if any(token in action for token in ("saml", "auth", "login", "resume")):
+            score += 2
+
+        if score:
+            ranked.append((score, form))
+
     if not ranked:
         return None
     ranked.sort(key=lambda item: item[0], reverse=True)
@@ -205,6 +248,44 @@ def submit_form(session: requests.Session, base_url: str, form: HtmlForm, payloa
     return response
 
 
+def describe_response(response: requests.Response) -> str:
+    parser = parse_forms(response.text)
+    return (
+        f"url={response.url} forms={len(parser.forms)} "
+        f"login_form={'yes' if pick_login_form(parser.forms) else 'no'} "
+        f"otp_form={'yes' if pick_otp_form(parser.forms) else 'no'} "
+        f"auto_form={'yes' if pick_auto_submit_form(parser.forms) else 'no'} "
+        f"meta_refresh={'yes' if parser.meta_refresh_url else 'no'}"
+    )
+
+
+def advance_to_interactive_page(session: requests.Session, response: requests.Response) -> requests.Response:
+    for step in range(1, 8):
+        parser = parse_forms(response.text)
+
+        if pick_login_form(parser.forms) or pick_otp_form(parser.forms):
+            if step > 1:
+                log(f"Reached interactive page after {step - 1} redirect step(s): {response.url}")
+            return response
+
+        if parser.meta_refresh_url:
+            next_url = urljoin(response.url, parser.meta_refresh_url)
+            log(f"Following meta refresh to {next_url}")
+            response = session.get(next_url, timeout=config.REQUEST_TIMEOUT_SECONDS)
+            response.raise_for_status()
+            continue
+
+        auto_form = pick_auto_submit_form(parser.forms)
+        if auto_form is not None:
+            log(f"Submitting intermediate redirect form at {response.url}")
+            response = submit_form(session, response.url, auto_form, dict(auto_form.inputs))
+            continue
+
+        return response
+
+    raise RuntimeError("Too many intermediate redirect steps while waiting for the PoliMi login page.")
+
+
 def authenticate_link(link: str) -> str:
     username = config.require(config.POLIMI_USERNAME, "POLIMI_USERNAME", "CINECA_USERNAME")
     password = config.require(config.POLIMI_PASSWORD, "POLIMI_PASSWORD", "CINECA_PASSWORD")
@@ -216,11 +297,15 @@ def authenticate_link(link: str) -> str:
     log(f"Loading VPN login page from {link}")
     response = session.get(link, timeout=config.REQUEST_TIMEOUT_SECONDS)
     response.raise_for_status()
+    response = advance_to_interactive_page(session, response)
 
     parser = parse_forms(response.text)
     login_form = pick_login_form(parser.forms)
     if login_form is None:
-        raise RuntimeError("Could not find the PoliMi credential form in the remote browser page.")
+        raise RuntimeError(
+            "Could not find the PoliMi credential form in the remote browser page. "
+            f"Page summary: {describe_response(response)}"
+        )
 
     log("Submitting PoliMi credentials")
     login_payload = fill_login_payload(login_form, username, password)
