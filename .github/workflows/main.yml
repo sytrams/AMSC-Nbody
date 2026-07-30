@@ -53,13 +53,12 @@ jobs:
 
           COOKIE="$(python3 vpn_remote_auth.py --portal "$PORTAL" --print-cookie-only)"
 
-          coproc GPCLIENT { stdbuf -oL -eL sudo gpclient --fix-openssl connect "$PORTAL" --cookie-on-stdin 2>&1; }
-          tee /tmp/gpclient.log <&"${GPCLIENT[0]}" >&2 &
+          : > /tmp/gpclient.log
+          printf '%s\n' "$COOKIE" | stdbuf -oL -eL sudo gpclient --fix-openssl connect "$PORTAL" --cookie-on-stdin \
+            > /tmp/gpclient.log 2>&1 &
+          GPCLIENT_PID=$!
+          tail -f /tmp/gpclient.log >&2 &
           GPCLIENT_LOG_PID=$!
-
-          printf '%s\n' "$COOKIE" >&"${GPCLIENT[1]}"
-          GPCLIENT_STDIN_FD="${GPCLIENT[1]}"
-          eval "exec ${GPCLIENT_STDIN_FD}>&-"
 
           for attempt in $(seq 1 30); do
             if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \

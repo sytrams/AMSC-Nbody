@@ -9,7 +9,7 @@ from dataclasses import dataclass, field
 from html.parser import HTMLParser
 from subprocess import PIPE, Popen, run
 from typing import Iterable
-from urllib.parse import parse_qs, urljoin, urlparse
+from urllib.parse import parse_qs, unquote, urljoin, urlparse
 
 import pyotp
 import requests
@@ -18,6 +18,7 @@ import config
 
 
 URL_RE = re.compile(r"https?://[^\s\"'>]+")
+CALLBACK_RE = re.compile(r"globalprotectcallback:[^\s\"'<>]+")
 CODE_LABEL_RE = re.compile(r"(?:code|codice)[^A-Za-z0-9]{0,20}([A-Z0-9-]{4,})", re.IGNORECASE)
 CODE_TOKEN_RE = re.compile(r"\b[A-Z0-9]{4,}(?:-[A-Z0-9]{2,})*\b")
 
@@ -207,7 +208,25 @@ def fill_otp_payload(form: HtmlForm, otp_code: str) -> dict[str, str]:
     return payload
 
 
-def extract_code(response: requests.Response) -> str:
+def extract_auth_data(response: requests.Response) -> str:
+    direct_match = CALLBACK_RE.search(response.url)
+    if direct_match:
+        return direct_match.group(0)
+
+    body_match = CALLBACK_RE.search(response.text)
+    if body_match:
+        return body_match.group(0)
+
+    decoded_url = unquote(response.url)
+    decoded_url_match = CALLBACK_RE.search(decoded_url)
+    if decoded_url_match:
+        return decoded_url_match.group(0)
+
+    decoded_body = unquote(response.text)
+    decoded_body_match = CALLBACK_RE.search(decoded_body)
+    if decoded_body_match:
+        return decoded_body_match.group(0)
+
     parsed_url = urlparse(response.url)
     query_code = parse_qs(parsed_url.query).get("code")
     if query_code:
@@ -235,7 +254,7 @@ def extract_code(response: requests.Response) -> str:
         if any(ch.isdigit() for ch in candidate) or "-" in candidate:
             return candidate
 
-    raise RuntimeError("Could not extract the final approval code from the response page.")
+    raise RuntimeError("Could not extract the final authentication payload from the response page.")
 
 
 def submit_form(session: requests.Session, base_url: str, form: HtmlForm, payload: dict[str, str]) -> requests.Response:
@@ -321,9 +340,12 @@ def authenticate_link(link: str) -> str:
         otp_payload = fill_otp_payload(otp_form, otp_code)
         response = submit_form(session, response.url, otp_form, otp_payload)
 
-    code = extract_code(response)
-    log("Extracted approval code from VPN page")
-    return code
+    auth_data = extract_auth_data(response)
+    if auth_data.startswith("globalprotectcallback:"):
+        log("Extracted GlobalProtect callback payload from VPN page")
+    else:
+        log("Extracted fallback approval code from VPN page")
+    return auth_data
 
 
 def build_gpauth_command(portal: str, fix_openssl: bool, gpauth_bin: str) -> list[str]:
@@ -361,8 +383,13 @@ def get_vpn_cookie(portal: str, fix_openssl: bool, gpauth_bin: str) -> str:
         process.wait(timeout=5)
         raise RuntimeError("gpauth did not print a remote browser URL.")
 
-    code = authenticate_link(link)
-    process.stdin.write(code + "\n")
+    auth_data = authenticate_link(link)
+    if not auth_data.startswith("globalprotectcallback:"):
+        raise RuntimeError(
+            "Authentication reached the final page, but the response did not contain a "
+            f"globalprotectcallback payload. Got: {auth_data[:80]}"
+        )
+    process.stdin.write(auth_data + "\n")
     process.stdin.flush()
     process.stdin.close()
 
