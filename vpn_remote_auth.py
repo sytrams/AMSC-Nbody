@@ -546,8 +546,18 @@ def build_gpauth_command(portal: str, fix_openssl: bool, gpauth_bin: str) -> lis
     return command
 
 
-def get_vpn_cookie(portal: str, fix_openssl: bool, gpauth_bin: str) -> str:
-    command = build_gpauth_command(portal, fix_openssl, gpauth_bin)
+def build_gpauth_command_for_mode(server: str, fix_openssl: bool, gpauth_bin: str, gateway: bool) -> list[str]:
+    command = [gpauth_bin]
+    if fix_openssl:
+        command.append("--fix-openssl")
+    if gateway:
+        command.append("--gateway")
+    command.extend([server, "--browser", "remote"])
+    return command
+
+
+def get_vpn_cookie(server: str, fix_openssl: bool, gpauth_bin: str, gateway: bool = False) -> str:
+    command = build_gpauth_command_for_mode(server, fix_openssl, gpauth_bin, gateway)
     log(f"Launching {' '.join(command)}")
     process = Popen(command, stdin=PIPE, stdout=PIPE, stderr=PIPE, text=True, bufsize=1)
     assert process.stdin is not None
@@ -619,6 +629,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--gpauth-bin", default=config.GPAUTH_BIN, help="Path to the gpauth binary.")
     parser.add_argument("--gpclient-bin", default=config.GPCLIENT_BIN, help="Path to the gpclient binary.")
     parser.add_argument(
+        "--gateway",
+        action="store_true",
+        help="Authenticate against a gateway instead of a portal when launching gpauth.",
+    )
+    parser.add_argument(
         "--no-sudo",
         action="store_true",
         help="Run gpclient without sudo even if GPCLIENT_USE_SUDO is enabled.",
@@ -647,7 +662,7 @@ def main() -> int:
     if not args.portal:
         raise RuntimeError("Set PORTAL or pass --portal when no LINK is provided.")
 
-    cookie = get_vpn_cookie(args.portal, args.fix_openssl, args.gpauth_bin)
+    cookie = get_vpn_cookie(args.portal, args.fix_openssl, args.gpauth_bin, gateway=args.gateway)
     if args.print_cookie_only:
         print(cookie)
         return 0

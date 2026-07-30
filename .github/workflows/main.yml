@@ -51,10 +51,40 @@ jobs:
           mkdir -p ~/.ssh
           chmod 700 ~/.ssh
 
-          COOKIE="$(python3 vpn_remote_auth.py --portal "$PORTAL" --print-cookie-only)"
+          PORTAL_COOKIE="$(python3 vpn_remote_auth.py --portal "$PORTAL" --print-cookie-only)"
+
+          : > /tmp/portal-probe.log
+          printf '%s\n' "$PORTAL_COOKIE" | stdbuf -oL -eL sudo gpclient --fix-openssl connect "$PORTAL" --cookie-on-stdin \
+            > /tmp/portal-probe.log 2>&1 &
+          PORTAL_PROBE_PID=$!
+
+          GATEWAY_HOST=""
+          for attempt in $(seq 1 30); do
+            if grep -Eo 'Connecting to the only available gateway: .+ \(([^)]+)\)' /tmp/portal-probe.log > /tmp/gateway-line.txt 2>/dev/null; then
+              GATEWAY_HOST="$(sed -E 's/.*\(([^)]+)\)$/\1/' /tmp/gateway-line.txt | tail -n 1)"
+              break
+            fi
+            if ! kill -0 "$PORTAL_PROBE_PID" 2>/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+
+          if [[ -z "$GATEWAY_HOST" ]]; then
+            echo "Could not determine gateway host from portal probe." >&2
+            cat /tmp/portal-probe.log >&2 || true
+            exit 1
+          fi
+
+          echo "Resolved gateway host: $GATEWAY_HOST"
+
+          sudo gpclient disconnect || true
+          wait "$PORTAL_PROBE_PID" || true
+
+          GATEWAY_COOKIE="$(python3 vpn_remote_auth.py --portal "$GATEWAY_HOST" --gateway --print-cookie-only)"
 
           : > /tmp/gpclient.log
-          printf '%s\n' "$COOKIE" | stdbuf -oL -eL sudo gpclient --fix-openssl connect "$PORTAL" --cookie-on-stdin \
+          printf '%s\n' "$GATEWAY_COOKIE" | stdbuf -oL -eL sudo gpclient --fix-openssl connect "$GATEWAY_HOST" --as-gateway --cookie-on-stdin \
             > /tmp/gpclient.log 2>&1 &
           GPCLIENT_PID=$!
           tail -f /tmp/gpclient.log >&2 &
