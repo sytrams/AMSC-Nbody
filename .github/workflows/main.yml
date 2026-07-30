@@ -1,0 +1,60 @@
+name: N-bodies-BONSAY CI/CD
+
+run-name: ${{ github.actor }} is testing out GitHub Actions
+
+on: 
+  push:
+    branches: main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-22.04
+    steps:
+      # Checkout the repository
+      - name: Checkout Code
+        uses: actions/checkout@v6
+
+      - name: Install dependencies
+        run: |
+          wget https://github.com/sylabs/singularity/releases/download/v4.4.2/singularity-ce_4.4.2-noble_amd64.deb
+          sudo apt install ./singularity-ce_4.4.2-noble_amd64.deb
+          sudo add-apt-repository ppa:yuezk/globalprotect-openconnect
+          sudo apt-get update
+          sudo apt-get install globalprotect-openconnect
+          python3 -m pip install -r requirements.txt
+                  
+      # - name: Build the container
+      #   run: singularity build --fakeroot singularity.sif Singularity.def
+
+      - name: Start ssh-agent and load key
+        env:
+          SSH_PRIV: ${{ secrets.SSH_PRIV }}
+        run: |
+          eval "$(ssh-agent -s)"
+          printf '%s\n' "$SSH_PRIV" | tr -d '\r' | ssh-add -
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+
+      - name: Install Python deps
+        run: python3 -m pip install -r requirements.txt
+
+      - name: Connect VPN
+        env:
+          PORTAL: ${{ secrets.PORTAL }}
+          POLIMI_USERNAME: ${{ secrets.USERNAME }}
+          POLIMI_PASSWORD: ${{ secrets.PASSWORD }}
+          POLIMI_OTP_SECRET: ${{ secrets.OTP_KEY_GEN }}
+        run: python3 vpn_remote_auth.py
+      
+      - name: Archive valid_data.csv
+        uses: actions/upload-artifact@v7
+        with:
+          path: results/valid_data.csv
+          archive: false
+
+      - name: Archive alarm.log
+        uses: actions/upload-artifact@v7
+        with:
+          path: results/alarms.log
+          archive: false
+          
