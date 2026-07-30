@@ -16,15 +16,29 @@ def main():
     with sync_playwright() as p:
         browser = p.chromium.launch(headless=True)
         page = browser.new_page()
-        page.goto(link)
+        page.goto(link, wait_until="domcontentloaded")
 
-        page.locator('input[name="username"]').fill(username)
-        page.locator('input[name="password"]').fill(password)
-        page.locator('button[type="submit"], input[type="submit"]').click()
+        page.locator("#myform").evaluate("form => form.submit()")
 
-        otp = pyotp.TOTP(otp_secret).now()
-        page.locator('input[name="otp"], input[name="code"]').fill(otp)
-        page.locator('button[type="submit"], input[type="submit"]').click()
+        page.wait_for_url("**shibidp.polimi.it/**", timeout=30000)
+        page.wait_for_load_state("domcontentloaded")
+
+        print(page.url, file=sys.stderr, flush=True)
+        page.screenshot(path="debug-login.png")
+
+        username = page.locator(
+            'input[name="username"], input[name="j_username"], input[id="username"], input[type="text"], input[type="email"]'
+        ).first
+
+        password = page.locator(
+            'input[name="password"], input[name="j_password"], input[id="password"], input[type="password"]'
+        ).first
+
+        username.wait_for(timeout=30000)
+        password.wait_for(timeout=30000)
+
+        username.fill(os.environ["POLIMI_USERNAME"])
+        password.fill(os.environ["POLIMI_PASSWORD"])
     body = page.text_content("body") or ""
     m = re.search(r"globalprotectcallback:[^\s]+", body)
     if not m:
