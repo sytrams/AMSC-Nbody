@@ -212,6 +212,7 @@ def pick_login_form(forms: Iterable[HtmlForm]) -> HtmlForm | None:
     return ranked[0][1]
 
 
+
 def pick_otp_form(forms: Iterable[HtmlForm]) -> HtmlForm | None:
     ranked: list[tuple[int, HtmlForm]] = []
     for form in forms:
