@@ -21,6 +21,11 @@ URL_RE = re.compile(r"https?://[^\s\"'>]+")
 CALLBACK_RE = re.compile(r"globalprotectcallback:[^\s\"'<>]+")
 CODE_LABEL_RE = re.compile(r"(?:code|codice)[^A-Za-z0-9]{0,20}([A-Z0-9-]{4,})", re.IGNORECASE)
 CODE_TOKEN_RE = re.compile(r"\b[A-Z0-9]{4,}(?:-[A-Z0-9]{2,})*\b")
+OTP_HINT_RE = re.compile(
+    r"\b(?:otp|totp|mfa|2fa|two[\s-]?factor|one[\s-]?time|verification code|passcode|token|codice)\b",
+    re.IGNORECASE,
+)
+OTP_FIELD_TOKENS = ("otp", "totp", "code", "token", "passcode", "pin", "verify", "verification")
 
 
 @dataclass
@@ -123,12 +128,19 @@ def pick_otp_form(forms: Iterable[HtmlForm]) -> HtmlForm | None:
     for form in forms:
         names = _field_names(form.inputs)
         score = 0
-        if any("otp" in name or "totp" in name for name in names):
+        if any(any(token in name for token in OTP_FIELD_TOKENS) for name in names):
             score += 6
-        if any("code" in name for name in names):
-            score += 3
-        if "otp" in form.attrs.get("id", "").lower():
+        form_id = form.attrs.get("id", "").lower()
+        form_class = form.attrs.get("class", "").lower()
+        form_action = form.action.lower()
+        if any(token in form_id for token in ("otp", "mfa", "token", "verify", "twofactor")):
             score += 4
+        if any(token in form_class for token in ("otp", "mfa", "token", "verify", "twofactor")):
+            score += 3
+        if any(token in form_action for token in ("otp", "mfa", "token", "verify", "twofactor")):
+            score += 2
+        if len(names) == 1 and not any("pass" in name or "user" in name for name in names):
+            score += 1
         if score:
             ranked.append((score, form))
     if not ranked:
@@ -196,7 +208,7 @@ def fill_login_payload(form: HtmlForm, username: str, password: str) -> dict[str
 def fill_otp_payload(form: HtmlForm, otp_code: str) -> dict[str, str]:
     payload = dict(form.inputs)
     otp_field = next(
-        (name for name in payload if any(token in name.lower() for token in ("otp", "totp", "code"))),
+        (name for name in payload if any(token in name.lower() for token in OTP_FIELD_TOKENS)),
         None,
     )
     if otp_field is None:
@@ -274,7 +286,8 @@ def describe_response(response: requests.Response) -> str:
         f"login_form={'yes' if pick_login_form(parser.forms) else 'no'} "
         f"otp_form={'yes' if pick_otp_form(parser.forms) else 'no'} "
         f"auto_form={'yes' if pick_auto_submit_form(parser.forms) else 'no'} "
-        f"meta_refresh={'yes' if parser.meta_refresh_url else 'no'}"
+        f"meta_refresh={'yes' if parser.meta_refresh_url else 'no'} "
+        f"otp_hint={'yes' if OTP_HINT_RE.search(' '.join(parser.text_parts)) else 'no'}"
     )
 
 
@@ -305,6 +318,18 @@ def advance_to_interactive_page(session: requests.Session, response: requests.Re
     raise RuntimeError("Too many intermediate redirect steps while waiting for the PoliMi login page.")
 
 
+def page_has_callback(response: requests.Response) -> bool:
+    return CALLBACK_RE.search(response.url) is not None or CALLBACK_RE.search(response.text) is not None
+
+
+def page_looks_like_otp(response: requests.Response) -> bool:
+    parser = parse_forms(response.text)
+    if pick_otp_form(parser.forms):
+        return True
+    merged_text = "\n".join(parser.text_parts)
+    return OTP_HINT_RE.search(merged_text) is not None
+
+
 def authenticate_link(link: str) -> str:
     username = config.require(config.POLIMI_USERNAME, "POLIMI_USERNAME", "CINECA_USERNAME")
     password = config.require(config.POLIMI_PASSWORD, "POLIMI_PASSWORD", "CINECA_PASSWORD")
@@ -329,16 +354,28 @@ def authenticate_link(link: str) -> str:
     log("Submitting PoliMi credentials")
     login_payload = fill_login_payload(login_form, username, password)
     response = submit_form(session, response.url, login_form, login_payload)
+    response = advance_to_interactive_page(session, response)
+    log(f"Post-login page summary: {describe_response(response)}")
 
     for attempt in range(3):
+        if page_has_callback(response):
+            break
+
         otp_parser = parse_forms(response.text)
         otp_form = pick_otp_form(otp_parser.forms)
         if otp_form is None:
+            if page_looks_like_otp(response):
+                raise RuntimeError(
+                    "The page appears to require OTP/MFA, but the script could not identify the OTP form. "
+                    f"Page summary: {describe_response(response)}"
+                )
             break
         otp_code = pyotp.TOTP(otp_secret).now()
         log(f"Submitting OTP challenge #{attempt + 1}")
         otp_payload = fill_otp_payload(otp_form, otp_code)
         response = submit_form(session, response.url, otp_form, otp_payload)
+        response = advance_to_interactive_page(session, response)
+        log(f"Post-OTP page summary #{attempt + 1}: {describe_response(response)}")
 
     auth_data = extract_auth_data(response)
     if auth_data.startswith("globalprotectcallback:"):
