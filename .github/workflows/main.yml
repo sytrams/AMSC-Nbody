@@ -46,7 +46,7 @@ jobs:
           POLIMI_PASSWORD: ${{ secrets.PASSWORD }}
           POLIMI_OTP_SECRET: ${{ secrets.OTP_KEY_GEN }}
         run: |
-          coproc GP { stdbuf -oL -eL sudo gpclient connect --browser remote gp-dmat-saml.vpn.polimi.it 2>&1; }
+          coproc GP { stdbuf -oL -eL sudo gpclient connect --browser remote "$PORTAL" 2>&1; }
 
           LINK=""
           while IFS= read -r line <&"${GP[0]}"; do
@@ -61,6 +61,10 @@ jobs:
             echo "Failed to capture gpclient login URL" >&2
             exit 1
           fi
+
+          echo "$LINK"
+          curl -v "$LINK"
+          ss -ltn | grep 33601
 
           CALLBACK="$(python3 vpn_remote_auth.py "$LINK")"
 
