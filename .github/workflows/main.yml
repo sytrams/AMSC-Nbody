@@ -1,104 +1,54 @@
-name: N-bodies-BONSAY CI/CD
+name: VPN SSH operation
 
-run-name: ${{ github.actor }} is testing out GitHub Actions
-
-on: 
+on:
   push:
     branches: main
 
+permissions:
+  contents: read
+
+concurrency:
+  group: polimi-vpn-ssh
+  cancel-in-progress: false
+
 jobs:
-  deploy:
-    runs-on: ubuntu-24.04
+  connect:
+    # Recommended:
+    runs-on: [self-hosted, linux, polimi-vpn]
+
+    # Protect this environment with allowed branches and reviewers.
+    #environment: polimi-vpn
+    timeout-minutes: 30
+
     steps:
-      - name: Checkout Code
-        uses: actions/checkout@v6
+      - uses: actions/checkout@v6
 
-      - name: Install dependencies
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install browser dependencies
         run: |
-          set -euo pipefail
-          wget https://github.com/sylabs/singularity/releases/download/v4.4.2/singularity-ce_4.4.2-noble_amd64.deb
-          sudo apt-get install -y ./singularity-ce_4.4.2-noble_amd64.deb
-          sudo add-apt-repository -y ppa:yuezk/globalprotect-openconnect
-          sudo apt-get update
-          sudo apt-get install -y globalprotect-openconnect
-                  
-      # - name: Build the container
-      #   run: singularity build --fakeroot singularity.sif Singularity.def
+          python -m pip install --require-hashes \
+            -r ci/vpn-requirements.txt
+          python -m playwright install chromium
 
-      - name: Install Python deps
-        run: |
-          python3 -m pip install --upgrade pip
-          python3 -m pip install -r requirements.txt
-
-      - name: Connect VPN And Verify Cluster Access
+      - name: Authenticate, connect VPN, and run SSH
+        shell: bash
         env:
-          PORTAL: ${{ secrets.PORTAL }}
-          POLIMI_USERNAME: ${{ secrets.USERNAME }}
-          POLIMI_PASSWORD: ${{ secrets.PASSWORD }}
-          POLIMI_OTP_SECRET: ${{ secrets.OTP_KEY_GEN }}
-          POLIMI_CLUSTER_USER: ${{ secrets.SSH_USERNAME }}
-          POLIMI_CLUSTER_HOST: 10.78.18.100
-          SSH_PRIV: ${{ secrets.SSH_PRIV }}
-          GPAUTH_FIX_OPENSSL: "1"
-          GPCLIENT_FIX_OPENSSL: "1"
-        run: |
-          set -euo pipefail
+          GP_PORTAL: ${{ vars.GP_PORTAL }}
 
-          eval "$(ssh-agent -s)"
-          trap 'sudo gpclient disconnect || true; ssh-agent -k >/dev/null || true' EXIT
+          POLIMI_USER: ${{ secrets.POLIMI_USER }}
+          POLIMI_PASSWORD: ${{ secrets.POLIMI_PASSWORD }}
+          POLIMI_TOTP_SEED: ${{ secrets.POLIMI_TOTP_SEED }}
 
-          printf '%s\n' "$SSH_PRIV" | tr -d '\r' | ssh-add -
-          mkdir -p ~/.ssh
-          chmod 700 ~/.ssh
+          SSH_HOST: ${{ vars.SSH_HOST }}
+          SSH_PORT: ${{ vars.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: scripts/run_over_vpn.sh
 
-          : > /tmp/gpclient.log
-          PORTAL_COOKIE="$(python3 vpn_remote_auth.py --portal "$PORTAL" --print-cookie-only)"
-          printf '%s\n' "$PORTAL_COOKIE" | stdbuf -oL -eL sudo gpclient --fix-openssl connect "$PORTAL" --cookie-on-stdin \
-            > /tmp/gpclient.log 2>&1 &
-          GPCLIENT_PID=$!
-          tail -f /tmp/gpclient.log >&2 &
-          GPCLIENT_LOG_PID=$!
-
-          for attempt in $(seq 1 30); do
-            if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=no \
-              "$POLIMI_CLUSTER_USER@$POLIMI_CLUSTER_HOST" 'hostname' > /tmp/cluster-hostname.txt 2> /tmp/cluster-ssh.log; then
-              break
-            fi
-
-            if ! kill -0 "$GPCLIENT_PID" 2>/dev/null; then
-              echo "gpclient exited before SSH became reachable." >&2
-              cat /tmp/cluster-ssh.log >&2 || true
-              exit 1
-            fi
-
-            sleep 2
-          done
-
-          if [[ ! -s /tmp/cluster-hostname.txt ]]; then
-            echo "VPN came up, but SSH to the cluster host never succeeded." >&2
-            cat /tmp/cluster-ssh.log >&2 || true
-            exit 1
-          fi
-
-          echo "Cluster login node:"
-          cat /tmp/cluster-hostname.txt
-
-          sudo gpclient disconnect || true
-          wait "$GPCLIENT_PID" || true
-          kill "$GPCLIENT_LOG_PID" || true
-          
-      
-      - name: Archive valid_data.csv
-        uses: actions/upload-artifact@v7
-        with:
-          path: results/valid_data.csv
-          archive: false
-          if-no-files-found: ignore
-
-      - name: Archive alarm.log
-        uses: actions/upload-artifact@v7
-        with:
-          path: results/alarms.log
-          archive: false
-          if-no-files-found: ignore
-          
+      - name: Emergency VPN cleanup
+        if: always()
+        run: sudo -n gpclient disconnect || true
