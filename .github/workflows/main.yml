@@ -1,8 +1,7 @@
 name: VPN SSH operation
 
 on:
-  push:
-    branches: main
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -13,25 +12,59 @@ concurrency:
 
 jobs:
   connect:
-    # Recommended:
-    runs-on: [self-hosted, linux, polimi-vpn]
-
-    # Protect this environment with allowed branches and reviewers.
-    #environment: polimi-vpn
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
 
     steps:
-      - uses: actions/checkout@v6
+      - name: Check out repository
+        uses: actions/checkout@v6
 
-      - uses: actions/setup-python@v6
+      - name: Set up Python
+        uses: actions/setup-python@v6
         with:
           python-version: "3.13"
 
-      - name: Install browser dependencies
+      - name: Check runner capabilities
+        shell: bash
         run: |
-          python -m pip install --require-hashes \
+          set -euxo pipefail
+          uname -a
+          sudo -n true
+          test -c /dev/net/tun
+          ls -l /dev/net/tun
+
+      - name: Install GlobalProtect client
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            software-properties-common \
+            netcat-openbsd \
+            openssh-client
+
+          sudo add-apt-repository \
+            --yes \
+            ppa:yuezk/globalprotect-openconnect
+
+          sudo apt-get update
+          sudo apt-get install -y globalprotect-openconnect
+
+          command -v gpclient
+          command -v gpauth
+          gpclient --version
+
+      - name: Install Python and browser dependencies
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          python -m pip install \
+            --disable-pip-version-check \
             -r ci/vpn-requirements.txt
-          python -m playwright install chromium
+
+          python -m playwright install --with-deps chromium
 
       - name: Authenticate, connect VPN, and run SSH
         shell: bash
@@ -47,8 +80,12 @@ jobs:
           SSH_USER: ${{ secrets.SSH_USER }}
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-        run: scripts/run_over_vpn.sh
+        run: bash scripts/run_over_vpn.sh
 
       - name: Emergency VPN cleanup
         if: always()
-        run: sudo -n gpclient disconnect || true
+        shell: bash
+        run: |
+          if command -v gpclient >/dev/null 2>&1; then
+            sudo -n gpclient disconnect || true
+          fi
