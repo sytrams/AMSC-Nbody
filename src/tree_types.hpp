@@ -1,6 +1,6 @@
-export module tree.types;   //EDO GUARDACI!!!!!!
+#pragma once    //impedisce inclusioni multiple
 
-export struct Tree
+struct Tree
 {
     int nBodies = 0;
     int nInternalNodes = 0;
@@ -17,4 +17,7 @@ export struct Tree
     float* comZ = nullptr;
 
     float* size = nullptr;
+
+    //bottom-up synchronization
+    int* visitCount = nullptr;
 };

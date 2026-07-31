@@ -1,15 +1,10 @@
-module;
-
 #include <cuda_runtime.h>
 #include <cstddef>
 #include <cstdint>
 #include <stdexcept>
 #include <string>
 
-
-module tree.builder;
-import tree.types;
-
+#include "tree_builder.hpp"
 
 __device__ int longestCommonPrefix(const std::uint32_t* keys, int i, int j, int N)
 {
