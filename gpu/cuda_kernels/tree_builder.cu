@@ -154,11 +154,9 @@ __global__ void computeCentersOfMassKernel(Tree tree, int N)
         const float totalMass = leftMass + rightMass;
         tree.mass[parentNode] = totalMass;
 
-
-        //chiedo conoferma su a cosa seerve questo pezzoo sul formato dei float, non sto a capì
         if (totalMass > 0.0f)       
         {
-            const float inverseMass = 1.0f / totalMass;
+            const float inverseMass = 1.0f / totalMass; //inverse of the mass to multiply directly fo all the dimensions
 
             tree.comX[parentNode] = (leftMass * tree.comX[leftChild] + rightMass * tree.comX[rightChild]) * inverseMass;
 
@@ -353,7 +351,7 @@ void buildTree (Tree& tree, const std::uint32_t* d_sortedKeys, int N)
 void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, const float* d_mass, const float* d_positionX, const float* d_positionY, const float* d_positionZ, int N)
 {
     if (N <= 0)
-        throw std::invalid_argument("computeCentersOfMass requires N >= ");
+        throw std::invalid_argument("computeCentersOfMass requires N >= 1");
 
     if (tree.nBodies != N)
         throw std::invalid_argument("computeCentersOfMass N does not match tree size");
@@ -362,7 +360,7 @@ void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, cons
         throw std::invalid_argument("d_sortedIndices must not be null");
 
     if (d_mass == nullptr || d_positionX == nullptr || d_positionY == nullptr || d_positionZ == nullptr)
-        throw std::invalid_argument("Particle data arrays must nto be null");
+        throw std::invalid_argument("Particle data arrays must not be null");
 
     if (tree.parent == nullptr || tree.mass == nullptr || tree.comX == nullptr || tree.comY == nullptr || tree.comZ == nullptr)
         throw std::logic_error("Tree memory has not been fully allocated");

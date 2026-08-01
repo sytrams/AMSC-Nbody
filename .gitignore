@@ -28,6 +28,7 @@
 
 # Executables
 build/
+build_tree/
 *.exe
 *.out
 *.app
@@ -52,4 +53,3 @@ external/
 #python
 __pycache__/
 *.pyc
-build_tree/
