@@ -52,3 +52,4 @@ external/
 #python
 __pycache__/
 *.pyc
+build_tree/
