@@ -75,7 +75,7 @@ jobs:
           POLIMI_PASSWORD: ${{secrets.POLIMI_PASSWORD}}
           POLIMI_TOTP: ${{secrets.POLIMI_TOTP}}
           POLIMI_VPN: ${{secrets.POLIMI_VPN}}
-        run: bash python3 vpn_remote_auth.py
+        run: python3 vpn_remote_auth.py
 
       - name: Emergency VPN cleanup
         if: always()
