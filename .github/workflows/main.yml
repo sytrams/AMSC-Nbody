@@ -61,7 +61,7 @@ jobs:
         run: |
           set -euxo pipefail
 
-          python -m pip install requirements.txt
+          python -m pip install -r requirements.txt
 
           #python -m playwright install --with-deps chromium
 
