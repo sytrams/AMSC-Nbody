@@ -6,11 +6,33 @@
 
 #include "tree_builder.hpp"
 
+namespace {
+
+template <typename T>
+void allocateDeviceArray(T*& pointer, std::size_t count, const char* name)
+{
+    if (count == 0)
+        return;
+
+    const cudaError_t error = cudaMalloc(
+        reinterpret_cast<void**>(&pointer),
+        count * sizeof(T));
+
+    if (error != cudaSuccess)
+    {
+        throw std::runtime_error(
+            std::string("cudaMalloc ") + name + " failed: " +
+            cudaGetErrorString(error));
+    }
+}
+
+} // namespace
+
 __device__ int longestCommonPrefix(const std::uint32_t* keys, int i, int j, int N)
 {
     if (j<0 || j>=N)
         return -1;
-    
+
     if (i==j)
         return 64;  //defensive check
 
@@ -44,10 +66,10 @@ __device__ void determineRange(const std::uint32_t* keys, int i, int N, int& fir
     int length = 2; //the immediate neigbour is known to belong in the range, so distance 2 is the first upper-bound candidate
     while (longestCommonPrefix(keys, i, i+length*direction, N)>deltaMin)
     {
-        length *= 2; 
+        length *= 2;
     }
 
-    //binary search to find the exact point 
+    //binary search to find the exact point
     int l = 0;
     for (int t = length/2; t>=1; t/=2)
     {
@@ -67,11 +89,11 @@ __device__ int findSplit(const std::uint32_t* keys, int first, int last, int N)
         return first;
 
     const int nodePrefix = longestCommonPrefix(keys, first, last, N);   //keys are ordered, no need to check each one of them
-    
+
     int split = first;  //initial position -> i assume the left node contains at least the first key
     int step = last - first;    //maximum possible distance
 
-    do 
+    do
     {
         step = (step + 1) >> 1; //dimezzamento con arrotondamento verso l'alto -> equals to step = (step+1)/2
         const int candidate = split + step; //avanzo di step
@@ -94,12 +116,16 @@ __global__ void buildTreeKernel(Tree tree, const std::uint32_t* keys, int N)
     int first;
     int last;
 
-    determineRange(keys, i, N, first, last);    
+    determineRange(keys, i, N, first, last);
+
+    tree.rangeFirst[i] = first;
+    tree.rangeLast[i] = last;
+    tree.prefixLength[i] = longestCommonPrefix(keys, first, last, N);
 
     const int split = findSplit(keys, first, last, N);
     const int leftChild = (split == first) ? split : N + split;
     const int rightChild = (split+1 == last) ? split+1 : N + split+1;
-    tree.left[i] = leftChild;   
+    tree.left[i] = leftChild;
     tree.right[i] = rightChild;
 
     const int currentNode = N + i;
@@ -114,7 +140,7 @@ __global__ void initializeLeavesKernel(Tree tree, const std::uint32_t* sortedInd
 
     if (leaf >= N)
         return;
-    
+
     //leaf is the position in Morton order, particleIndex is the index in the original order
     const std::uint32_t particleIndex = sortedIndices[leaf];
 
@@ -142,7 +168,7 @@ __global__ void computeCentersOfMassKernel(Tree tree, int N)
         __threadfence();
 
         const int oldCount = atomicAdd(&tree.visitCount[parentIndex],1);    //doesn't this slow down computation????
-        
+
         //the first child can't compute the parent
         if (oldCount == 0)
             return;
@@ -154,7 +180,7 @@ __global__ void computeCentersOfMassKernel(Tree tree, int N)
         const float totalMass = leftMass + rightMass;
         tree.mass[parentNode] = totalMass;
 
-        if (totalMass > 0.0f)       
+        if (totalMass > 0.0f)
         {
             const float inverseMass = 1.0f / totalMass; //inverse of the mass to multiply directly fo all the dimensions
 
@@ -179,93 +205,48 @@ __global__ void computeCentersOfMassKernel(Tree tree, int N)
 //memory allocation
 void allocateTree(Tree& tree, int N)
 {
-    if (tree.left != nullptr || tree.right != nullptr || tree.parent != nullptr || tree.visitCount != nullptr || tree.mass != nullptr || tree.comX != nullptr || tree.comY != nullptr || tree.comZ != nullptr || tree.size != nullptr)
+    if (tree.left != nullptr || tree.right != nullptr ||
+        tree.parent != nullptr || tree.rangeFirst != nullptr ||
+        tree.rangeLast != nullptr || tree.prefixLength != nullptr ||
+        tree.visitCount != nullptr || tree.mass != nullptr ||
+        tree.comX != nullptr || tree.comY != nullptr ||
+        tree.comZ != nullptr)
+    {
         throw std::logic_error("Tree memory is already allocated");
+    }
 
     if (N <= 0)
         throw std::invalid_argument("N must be positive");
 
     const std::size_t internalNodeCount = static_cast<std::size_t>(N - 1);
-
     const std::size_t totalNodeCount = static_cast<std::size_t>(N) * 2 - 1;
 
-    cudaError_t error;
-
-    if (N > 1)
+    try
     {
-        error = cudaMalloc(reinterpret_cast<void**>(&tree.left), internalNodeCount * sizeof(int));
-
-        if (error != cudaSuccess)
-            throw std::runtime_error(std::string("cudaMalloc tree.left failed: ") + cudaGetErrorString(error));
-
-        error = cudaMalloc(reinterpret_cast<void**>(&tree.right), internalNodeCount * sizeof(int));
-
-        if (error != cudaSuccess)
+        if (N > 1)
         {
-            cudaFree(tree.left);
-            tree.left = nullptr;
-
-            throw std::runtime_error(std::string("cudaMalloc tree.right failed: ") + cudaGetErrorString(error));
+            allocateDeviceArray(tree.left, internalNodeCount, "tree.left");
+            allocateDeviceArray(tree.right, internalNodeCount, "tree.right");
+            allocateDeviceArray(tree.rangeFirst, internalNodeCount,
+                                "tree.rangeFirst");
+            allocateDeviceArray(tree.rangeLast, internalNodeCount,
+                                "tree.rangeLast");
+            allocateDeviceArray(tree.prefixLength, internalNodeCount,
+                                "tree.prefixLength");
+            allocateDeviceArray(tree.visitCount, internalNodeCount,
+                                "tree.visitCount");
         }
 
-        error = cudaMalloc(reinterpret_cast<void**>(&tree.visitCount), internalNodeCount * sizeof(int));
-
-        if (error != cudaSuccess)
-        {
-            freeTree(tree);
-
-            throw std::runtime_error(std::string("cudaMalloc tree.visitCount failed: ") + cudaGetErrorString(error));
-        }
+        allocateDeviceArray(tree.parent, totalNodeCount, "tree.parent");
+        allocateDeviceArray(tree.mass, totalNodeCount, "tree.mass");
+        allocateDeviceArray(tree.comX, totalNodeCount, "tree.comX");
+        allocateDeviceArray(tree.comY, totalNodeCount, "tree.comY");
+        allocateDeviceArray(tree.comZ, totalNodeCount, "tree.comZ");
     }
-
-    error = cudaMalloc(reinterpret_cast<void**>(&tree.parent), totalNodeCount * sizeof(int));
-
-    if (error != cudaSuccess)
-    {
-        cudaFree(tree.left);
-        cudaFree(tree.right);
-
-        tree.left = nullptr;
-        tree.right = nullptr;
-
-        throw std::runtime_error(std::string("cudaMalloc tree.parent failed: ") + cudaGetErrorString(error));
-    }
-
-    const std::size_t physicalBytes = totalNodeCount * sizeof(float);
-
-    error = cudaMalloc(reinterpret_cast<void**>(&tree.mass), physicalBytes);
-
-    if (error != cudaSuccess) 
+    catch (...)
     {
         freeTree(tree);
-        throw std::runtime_error(std::string("cudaMalloc tree.mass failed: ") + cudaGetErrorString(error));
-    }
-
-    error = cudaMalloc(reinterpret_cast<void**>(&tree.comX), physicalBytes);
-
-    if (error != cudaSuccess)
-    {
-        freeTree(tree);
-
-        throw std::runtime_error(std::string("cudaMalloc tree.comX failed: ") + cudaGetErrorString(error));
-    }
-
-    error = cudaMalloc(reinterpret_cast<void**>(&tree.comY), physicalBytes);
-
-    if (error != cudaSuccess)
-    {
-        freeTree(tree);
-
-        throw std::runtime_error(std::string("cudaMalloc tree.comY failed: ") + cudaGetErrorString(error));
-    }
-
-    error = cudaMalloc(reinterpret_cast<void**>(&tree.comZ), physicalBytes);
-
-    if (error != cudaSuccess)
-    {
-        freeTree(tree);
-
-        throw std::runtime_error(std::string("cudaMalloc tree.comZ failed: ") + cudaGetErrorString(error));
+        throw;
     }
 
     tree.nBodies = N;
@@ -279,11 +260,14 @@ void freeTree(Tree& tree)
     cudaFree(tree.right);
     cudaFree(tree.parent);
 
+    cudaFree(tree.rangeFirst);
+    cudaFree(tree.rangeLast);
+    cudaFree(tree.prefixLength);
+
     cudaFree(tree.mass);
     cudaFree(tree.comX);
     cudaFree(tree.comY);
     cudaFree(tree.comZ);
-    cudaFree(tree.size);
 
     cudaFree(tree.visitCount);
 
@@ -291,11 +275,14 @@ void freeTree(Tree& tree)
     tree.right = nullptr;
     tree.parent = nullptr;
 
+    tree.rangeFirst = nullptr;
+    tree.rangeLast = nullptr;
+    tree.prefixLength = nullptr;
+
     tree.mass = nullptr;
     tree.comX = nullptr;
     tree.comY = nullptr;
     tree.comZ = nullptr;
-    tree.size = nullptr;
 
     tree.visitCount = nullptr;
 
@@ -315,14 +302,18 @@ void buildTree (Tree& tree, const std::uint32_t* d_sortedKeys, int N)
     if (tree.parent == nullptr)
         throw std::logic_error("Tree memory has not been allocated");
 
-    if (N > 1 && (tree.left == nullptr || tree.right == nullptr))
+    if (N > 1 &&
+        (tree.left == nullptr || tree.right == nullptr ||
+         tree.rangeFirst == nullptr || tree.rangeLast == nullptr ||
+         tree.prefixLength == nullptr))
     {
-        throw std::logic_error("Tree child arrays have not been allocated");
+        throw std::logic_error(
+            "Tree topology and metadata arrays have not been allocated");
     }
 
     if (d_sortedKeys == nullptr)
         throw std::invalid_argument("d_sortedKeys must not be null");
-    
+
     const std::size_t totalNodes = static_cast<std::size_t>(2 * N - 1);
 
     cudaError_t error = cudaMemset(tree.parent, 0xFF, totalNodes*sizeof(int));
@@ -332,7 +323,7 @@ void buildTree (Tree& tree, const std::uint32_t* d_sortedKeys, int N)
 
     if (N==1)
         return;
-    
+
     constexpr int threadsPerBlock = 256;
 
     const int blocks = (N-1 + threadsPerBlock -1)/threadsPerBlock;

@@ -100,6 +100,9 @@ struct HostTree
     std::vector<int> left;
     std::vector<int> right;
     std::vector<int> parent;
+    std::vector<int> rangeFirst;
+    std::vector<int> rangeLast;
+    std::vector<int> prefixLength;
     std::vector<int> visitCount;
     std::vector<float> mass;
     std::vector<float> comX;
@@ -124,6 +127,17 @@ HostTree copyTreeToHost(const Tree& tree, int n, bool copyPhysicalData)
         CUDA_CHECK(cudaMemcpy(host.left.data(), tree.left,
                               internalCount * sizeof(int), cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(host.right.data(), tree.right,
+                              internalCount * sizeof(int), cudaMemcpyDeviceToHost));
+
+        host.rangeFirst.resize(internalCount);
+        host.rangeLast.resize(internalCount);
+        host.prefixLength.resize(internalCount);
+
+        CUDA_CHECK(cudaMemcpy(host.rangeFirst.data(), tree.rangeFirst,
+                              internalCount * sizeof(int), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(host.rangeLast.data(), tree.rangeLast,
+                              internalCount * sizeof(int), cudaMemcpyDeviceToHost));
+        CUDA_CHECK(cudaMemcpy(host.prefixLength.data(), tree.prefixLength,
                               internalCount * sizeof(int), cudaMemcpyDeviceToHost));
     }
 
@@ -177,6 +191,40 @@ void requirePermutation(const std::vector<std::uint32_t>& indices, int n)
         require(count == 1, "sortedIndices is not a permutation of [0, N)");
 }
 
+int countLeadingZeros32(std::uint32_t value)
+{
+    require(value != 0u, "countLeadingZeros32 requires a non-zero value");
+
+    int count = 0;
+    while ((value & 0x80000000u) == 0u)
+    {
+        ++count;
+        value <<= 1;
+    }
+    return count;
+}
+
+int hostLongestCommonPrefix(const std::vector<std::uint32_t>& keys,
+                            int i,
+                            int j)
+{
+    const int n = static_cast<int>(keys.size());
+
+    if (j < 0 || j >= n)
+        return -1;
+
+    if (i == j)
+        return 64;
+
+    const std::uint32_t keyDifference = keys[i] ^ keys[j];
+    if (keyDifference != 0u)
+        return countLeadingZeros32(keyDifference);
+
+    const std::uint32_t indexDifference =
+        static_cast<std::uint32_t>(i ^ j);
+    return 32 + countLeadingZeros32(indexDifference);
+}
+
 struct LeafRange
 {
     int first = -1;
@@ -184,8 +232,10 @@ struct LeafRange
     int count = 0;
 };
 
-int validateTopology(const HostTree& tree, int n)
+int validateTopology(const HostTree& tree,
+                     const std::vector<std::uint32_t>& keys)
 {
+    const int n = static_cast<int>(keys.size());
     const int totalNodes = 2 * n - 1;
 
     require(static_cast<int>(tree.parent.size()) == totalNodes,
@@ -195,6 +245,9 @@ int validateTopology(const HostTree& tree, int n)
     {
         require(tree.left.empty() && tree.right.empty(),
                 "A one-body tree must have no internal child arrays");
+        require(tree.rangeFirst.empty() && tree.rangeLast.empty() &&
+                    tree.prefixLength.empty(),
+                "A one-body tree must have no internal metadata arrays");
         require(tree.parent[0] == -1,
                 "The single leaf must also be the root");
         return 0;
@@ -204,6 +257,12 @@ int validateTopology(const HostTree& tree, int n)
             "left has the wrong number of elements");
     require(static_cast<int>(tree.right.size()) == n - 1,
             "right has the wrong number of elements");
+    require(static_cast<int>(tree.rangeFirst.size()) == n - 1,
+            "rangeFirst has the wrong number of elements");
+    require(static_cast<int>(tree.rangeLast.size()) == n - 1,
+            "rangeLast has the wrong number of elements");
+    require(static_cast<int>(tree.prefixLength.size()) == n - 1,
+            "prefixLength has the wrong number of elements");
 
     std::vector<int> incoming(static_cast<std::size_t>(totalNodes), 0);
 
@@ -289,6 +348,16 @@ int validateTopology(const HostTree& tree, int n)
         require(result.count == result.last - result.first + 1,
                 "An internal node does not cover a contiguous leaf range");
 
+        require(tree.rangeFirst[internalIndex] == result.first,
+                "rangeFirst does not match the subtree topology");
+        require(tree.rangeLast[internalIndex] == result.last,
+                "rangeLast does not match the subtree topology");
+
+        const int expectedPrefix =
+            hostLongestCommonPrefix(keys, result.first, result.last);
+        require(tree.prefixLength[internalIndex] == expectedPrefix,
+                "prefixLength does not match the node Morton-key range");
+
         state[node] = 2;
         return result;
     };
@@ -349,7 +418,7 @@ HostTree buildAndCopyTopology(const std::vector<std::uint32_t>& keys)
 
     buildTree(treeOwner.get(), deviceKeys.get(), n);
     HostTree hostTree = copyTreeToHost(treeOwner.get(), n, false);
-    validateTopology(hostTree, n);
+    validateTopology(hostTree, keys);
     return hostTree;
 }
 
@@ -467,7 +536,7 @@ void runEndToEndCase(const std::string& name,
                         deviceX.get(), deviceY.get(), deviceZ.get(), n);
 
     HostTree hostTree = copyTreeToHost(treeOwner.get(), n, true);
-    validateTopology(hostTree, n);
+    validateTopology(hostTree, keys);
     verifyCenterOfMass(hostTree, n, sortedIndices, particleMass,
                        positionX, positionY, positionZ);
 
@@ -492,6 +561,9 @@ void testTwoLeavesExactTopology()
     requireVectorEqual(tree.left, {0}, "two-leaf left");
     requireVectorEqual(tree.right, {1}, "two-leaf right");
     requireVectorEqual(tree.parent, {2, 2, -1}, "two-leaf parent");
+    requireVectorEqual(tree.rangeFirst, {0}, "two-leaf rangeFirst");
+    requireVectorEqual(tree.rangeLast, {1}, "two-leaf rangeLast");
+    requireVectorEqual(tree.prefixLength, {0}, "two-leaf prefixLength");
     std::cout << "[PASS] exact topology: two leaves\n";
 }
 
@@ -508,6 +580,12 @@ void testBalancedFourExactTopology()
     requireVectorEqual(tree.right, {6, 1, 3}, "balanced-four right");
     requireVectorEqual(tree.parent, {5, 5, 6, 6, -1, 4, 4},
                        "balanced-four parent");
+    requireVectorEqual(tree.rangeFirst, {0, 0, 2},
+                       "balanced-four rangeFirst");
+    requireVectorEqual(tree.rangeLast, {3, 1, 3},
+                       "balanced-four rangeLast");
+    requireVectorEqual(tree.prefixLength, {0, 1, 1},
+                       "balanced-four prefixLength");
     std::cout << "[PASS] exact topology: balanced four leaves\n";
 }
 
