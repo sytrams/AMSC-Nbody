@@ -56,6 +56,20 @@ jobs:
           command -v gpauth
           gpclient --version
 
+      - name: Configure CINECA SSH credential
+        shell: bash
+        env:
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+          SSH_CERTIFICATE: ${{ secrets.SSH_CERTIFICATE }}
+          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
+        run: |
+          install -m 700 -d ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/cineca
+          printf '%s\n' "$SSH_CERTIFICATE" > ~/.ssh/cineca-cert.pub
+          printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/cineca ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/cineca-cert.pub
+
       - name: Install Python and browser dependencies
         shell: bash
         run: |
@@ -73,7 +87,9 @@ jobs:
           POLIMI_PASSWORD: ${{secrets.POLIMI_PASSWORD}}
           POLIMI_TOTP: ${{secrets.POLIMI_TOTP}}
           POLIMI_VPN: ${{secrets.POLIMI_VPN}}
-        run: python3 vpn_remote_auth.py
+        run: |
+          
+          python3 vpn_remote_auth.py
 
       - name: Emergency VPN cleanup
         if: always()
