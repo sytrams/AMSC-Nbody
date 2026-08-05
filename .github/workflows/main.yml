@@ -88,8 +88,8 @@ jobs:
           POLIMI_TOTP: ${{secrets.POLIMI_TOTP}}
           POLIMI_VPN: ${{secrets.POLIMI_VPN}}
         run: |
-          
           python3 vpn_remote_auth.py
+          ssh ${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}
 
       - name: Emergency VPN cleanup
         if: always()

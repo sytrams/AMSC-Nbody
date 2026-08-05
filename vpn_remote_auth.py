@@ -56,7 +56,6 @@ def browser_session(url: str):
         insert_otp(page)
         page.wait_for_timeout(2000)
         callback =  get_callback(page)
-        print(callback)
         return callback
 
 def start_vpn():
