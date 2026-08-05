@@ -60,7 +60,7 @@ def browser_session(url: str):
 
 def start_vpn():
     gpauth = subprocess.Popen(
-        ["gpauth", required_secret("POLIMI_VPN"), "--browser", "remote"],
+        ["gpauth", "--cookie-cache", required_secret("POLIMI_VPN"), "--browser", "remote"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         stdin=subprocess.PIPE,
