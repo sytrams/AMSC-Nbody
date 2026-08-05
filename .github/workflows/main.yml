@@ -1,7 +1,8 @@
 name: VPN SSH operation
 
 on:
-  workflow_dispatch:
+  push: 
+    
 
 permissions:
   contents: read
@@ -69,18 +70,12 @@ jobs:
       - name: Authenticate, connect VPN, and run SSH
         shell: bash
         env:
-          GP_PORTAL: ${{ vars.GP_PORTAL }}
-
-          POLIMI_USER: ${{ secrets.POLIMI_USER }}
-          POLIMI_PASSWORD: ${{ secrets.POLIMI_PASSWORD }}
-          POLIMI_TOTP_SEED: ${{ secrets.POLIMI_TOTP_SEED }}
-
-          SSH_HOST: ${{ vars.SSH_HOST }}
-          SSH_PORT: ${{ vars.SSH_PORT }}
-          SSH_USER: ${{ secrets.SSH_USER }}
-          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
-          SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
-        run: bash scripts/run_over_vpn.sh
+          POLIMI_USERNAME: ${{secrets.POLIMI_USER}}
+          SSH_USERNAME: ${{secrets.SSH_USER}}
+          POLIMI_PASSWORD: ${{secrets.POLIMI_PASSWORD}}
+          POLIMI_TOTP: ${{secrets.POLIMI_TOTP}}
+          POLIMI_VPN: ${{secrets.POLIMI_VPN}}
+        run: bash python vpn_remote_auth.py
 
       - name: Emergency VPN cleanup
         if: always()
