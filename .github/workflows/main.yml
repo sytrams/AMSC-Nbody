@@ -3,14 +3,6 @@ name: VPN SSH operation
 on:
   push: 
     branches: main
-    
-
-permissions:
-  contents: read
-
-concurrency:
-  group: polimi-vpn-ssh
-  cancel-in-progress: false
 
 jobs:
   connect:
