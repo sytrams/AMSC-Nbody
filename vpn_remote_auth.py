@@ -74,7 +74,6 @@ def start_vpn():
             "gpclient",
             "connect",
             required_secret("POLIMI_VPN"),
-            "--cookie-on-stdin",
         ],
         stdin=gpauth.stdout,
         text=True,
