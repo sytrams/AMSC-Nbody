@@ -27,7 +27,7 @@ struct Octree
     float* centerX = nullptr;
     float* centerY = nullptr;
     float* centerZ = nullptr;
-    float* halfSie = nullptr;
+    float* halfSize = nullptr;
 
     //Bottom-up synchronization
     int* pendingChildren = nullptr;
