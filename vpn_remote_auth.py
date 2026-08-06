@@ -59,14 +59,14 @@ def browser_session(url: str):
         return callback
 
 def start_vpn():
-    gpauth = subprocess.Popen(
-        ["gpauth", required_secret("POLIMI_VPN"), "--browser", "remote"],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        stdin=subprocess.PIPE,
-        text=True,
-        bufsize=1,
-    )
+    # gpauth = subprocess.Popen(
+    #     ["gpauth", required_secret("POLIMI_VPN"), "--browser", "remote"],
+    #     stdout=subprocess.PIPE,
+    #     stderr=subprocess.PIPE,
+    #     stdin=subprocess.PIPE,
+    #     text=True,
+    #     bufsize=1,
+    # )
 
     gpclient = subprocess.Popen(
         [
@@ -74,16 +74,20 @@ def start_vpn():
             "gpclient",
             "connect",
             required_secret("POLIMI_VPN"),
+            "--browser",
+            "remote"
         ],
-        stdin=gpauth.stdout,
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+
         text=True,
         start_new_session = True,
     )
-    gpauth.stdout.close()
 
     url_pattern = re.compile(r"https?://\S+")
 
-    for line in gpauth.stderr:
+    for line in gpclient.stdout:
         # Show the initial program's output
         print(line, end="", flush=True)
 
@@ -96,7 +100,7 @@ def start_vpn():
         # helper.py receives the URL and prints the required response
         callback = browser_session(url).strip()
         if not callback or not callback.startswith("globalprotectcallback:"):
-            gpauth.terminate()
+            gpclient.terminate()
             raise RuntimeError(
                 "Expected globalprotectcallback:, "
                 f"but browser_session returned {callback!r}"
@@ -108,9 +112,9 @@ def start_vpn():
         #initial.stdin.write(response + "\n")
         #initial.stdin.flush()
 
-    gpauth.stdin.write(callback.rstrip("\r\n") + "\n")
-    gpauth.stdin.flush()
-    gpauth.stdin.close()
+    gpclient.stdin.write(callback.rstrip("\r\n") + "\n")
+    gpclient.stdin.flush()
+    gpclient.stdin.close()
     print(gpclient.pid)
     for line in gpclient.stdout:
             print(f"[gpclient] {line}", end="", flush=True)
