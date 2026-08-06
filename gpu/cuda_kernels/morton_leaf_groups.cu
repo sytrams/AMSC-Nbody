@@ -13,7 +13,7 @@ namespace
     void checkCuda (cudaError_t error, const char* operation)
     {
         if (error != cudaSuccess)
-        throw std::runtime_error(std::string(operation) + "failed: " + cudaGetErrorString(error));
+        throw std::runtime_error(std::string(operation) + " failed: " + cudaGetErrorString(error));
     }
 
     template <typename T>
@@ -76,8 +76,11 @@ void allocateMortonLeafGroups(MortonLeafGroups& groups, int capacity)
 void buildMortonLeafGroups(MortonLeafGroups& groups, const std::uint32_t* d_sortedKeys, int nParticles)
 {
     if (nParticles <= 0)
-        throw std::invalid_argument("nParticles exceeds MortonLeafGroups capacity");
+        throw std::invalid_argument("buildMortonLeafGroups requires nParticles >= 1");
     
+    if (nParticles > groups.capacity)
+        throw std::invalid_argument("nParticles exceeds MortonLeafGroups capacity");
+
     if (d_sortedKeys == nullptr)
         throw std::invalid_argument("d_sortedKeys must not be null");
 
