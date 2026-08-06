@@ -87,7 +87,7 @@ def start_vpn():
 
     url_pattern = re.compile(r"https?://\S+")
 
-    for line in gpclient.stdout:
+    for line in gpclient.stderr:
         # Show the initial program's output
         print(line, end="", flush=True)
 

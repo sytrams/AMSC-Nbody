@@ -2,6 +2,7 @@ name: VPN SSH operation
 
 on:
   push: 
+    branches: main
     
 
 permissions:
