@@ -9,264 +9,327 @@
 
 #include "morton_leaf_groups.hpp"
 
-namespace {
-
-void checkCuda(
-    cudaError_t error,
-    const char* operation)
+namespace 
 {
-    if (error != cudaSuccess)
+    void checkCuda(
+        cudaError_t error,
+        const char* operation)
     {
-        throw std::runtime_error(
-            std::string(operation) +
-            " failed: " +
-            cudaGetErrorString(error));
-    }
-}
-
-void require(
-    bool condition,
-    const std::string& message)
-{
-    if (!condition)
-        throw std::runtime_error(message);
-}
-
-template <typename T>
-void requireVectorEqual(
-    const std::vector<T>& actual,
-    const std::vector<T>& expected,
-    const std::string& description)
-{
-    if (actual.size() != expected.size())
-    {
-        throw std::runtime_error(
-            description + ": vector sizes differ");
-    }
-
-    for (std::size_t i = 0; i < actual.size(); ++i)
-    {
-        if (actual[i] != expected[i])
+        if (error != cudaSuccess)
         {
             throw std::runtime_error(
-                description +
-                ": mismatch at index " +
-                std::to_string(i));
+                std::string(operation) +
+                " failed: " +
+                cudaGetErrorString(error));
         }
     }
-}
 
-void validateInvariants(
-    const std::vector<std::uint32_t>& sortedKeys,
-    const std::vector<std::uint32_t>& uniqueKeys,
-    const std::vector<int>& firstParticle,
-    const std::vector<int>& particleCount)
-{
-    const int nGroups =
-        static_cast<int>(uniqueKeys.size());
-
-    require(
-        static_cast<int>(firstParticle.size()) == nGroups,
-        "firstParticle size does not match nGroups");
-
-    require(
-        static_cast<int>(particleCount.size()) == nGroups,
-        "particleCount size does not match nGroups");
-
-    require(
-        nGroups > 0,
-        "There must be at least one Morton group");
-
-    require(
-        firstParticle[0] == 0,
-        "The first Morton group must start at offset zero");
-
-    const int totalParticleCount =
-        std::accumulate(
-            particleCount.begin(),
-            particleCount.end(),
-            0);
-
-    require(
-        totalParticleCount ==
-            static_cast<int>(sortedKeys.size()),
-        "The sum of group counts does not match particle count");
-
-    for (int group = 0; group < nGroups; ++group)
+    void require(
+        bool condition,
+        const std::string& message)
     {
-        require(
-            particleCount[group] > 0,
-            "A Morton group has non-positive size");
+        if (!condition)
+            throw std::runtime_error(message);
+    }
 
-        if (group + 1 < nGroups)
+    template <typename T>
+    void requireVectorEqual(
+        const std::vector<T>& actual,
+        const std::vector<T>& expected,
+        const std::string& description)
+    {
+        if (actual.size() != expected.size())
         {
-            require(
-                uniqueKeys[group] < uniqueKeys[group + 1],
-                "Unique Morton keys are not strictly increasing");
-
-            require(
-                firstParticle[group + 1] ==
-                    firstParticle[group] +
-                    particleCount[group],
-                "Morton group offsets are not contiguous");
+            throw std::runtime_error(
+                description + ": vector sizes differ");
         }
 
-        const int first = firstParticle[group];
-        const int count = particleCount[group];
+        for (std::size_t i = 0; i < actual.size(); ++i)
+        {
+            if (actual[i] != expected[i])
+            {
+                throw std::runtime_error(
+                    description +
+                    ": mismatch at index " +
+                    std::to_string(i));
+            }
+        }
+    }
+
+    void validateInvariants(
+        const std::vector<std::uint32_t>& sortedKeys,
+        const std::vector<std::uint32_t>& uniqueKeys,
+        const std::vector<int>& firstParticle,
+        const std::vector<int>& particleCount)
+    {
+        const int nGroups =
+            static_cast<int>(uniqueKeys.size());
 
         require(
-            first >= 0,
-            "A Morton group has a negative starting offset");
+            static_cast<int>(firstParticle.size()) == nGroups,
+            "firstParticle size does not match nGroups");
 
         require(
-            first + count <=
+            static_cast<int>(particleCount.size()) == nGroups,
+            "particleCount size does not match nGroups");
+
+        require(
+            nGroups > 0,
+            "There must be at least one Morton group");
+
+        require(
+            firstParticle[0] == 0,
+            "The first Morton group must start at offset zero");
+
+        const int totalParticleCount =
+            std::accumulate(
+                particleCount.begin(),
+                particleCount.end(),
+                0);
+
+        require(
+            totalParticleCount ==
                 static_cast<int>(sortedKeys.size()),
-            "A Morton group exceeds the input range");
+            "The sum of group counts does not match particle count");
 
-        for (int localParticle = 0;
-             localParticle < count;
-             ++localParticle)
+        for (int group = 0; group < nGroups; ++group)
         {
             require(
-                sortedKeys[first + localParticle] ==
-                    uniqueKeys[group],
-                "A group contains a key different "
-                "from its unique Morton key");
+                particleCount[group] > 0,
+                "A Morton group has non-positive size");
+
+            if (group + 1 < nGroups)
+            {
+                require(
+                    uniqueKeys[group] < uniqueKeys[group + 1],
+                    "Unique Morton keys are not strictly increasing");
+
+                require(
+                    firstParticle[group + 1] ==
+                        firstParticle[group] +
+                        particleCount[group],
+                    "Morton group offsets are not contiguous");
+            }
+
+            const int first = firstParticle[group];
+            const int count = particleCount[group];
+
+            require(
+                first >= 0,
+                "A Morton group has a negative starting offset");
+
+            require(
+                first + count <=
+                    static_cast<int>(sortedKeys.size()),
+                "A Morton group exceeds the input range");
+
+            for (int localParticle = 0;
+                localParticle < count;
+                ++localParticle)
+            {
+                require(
+                    sortedKeys[first + localParticle] ==
+                        uniqueKeys[group],
+                    "A group contains a key different "
+                    "from its unique Morton key");
+            }
         }
     }
-}
 
-void runCase(
-    const std::string& name,
-    const std::vector<std::uint32_t>& sortedKeys,
-    const std::vector<std::uint32_t>& expectedUniqueKeys,
-    const std::vector<int>& expectedFirstParticle,
-    const std::vector<int>& expectedParticleCount)
-{
-    std::uint32_t* d_sortedKeys = nullptr;
-    MortonLeafGroups groups{};
-
-    try
+    void runCase(
+        const std::string& name,
+        const std::vector<std::uint32_t>& sortedKeys,
+        const std::vector<std::uint32_t>& expectedUniqueKeys,
+        const std::vector<int>& expectedFirstParticle,
+        const std::vector<int>& expectedParticleCount)
     {
-        const std::size_t inputBytes =
-            sortedKeys.size() * sizeof(std::uint32_t);
+        std::uint32_t* d_sortedKeys = nullptr;
+        MortonLeafGroups groups{};
 
-        checkCuda(
-            cudaMalloc(
-                reinterpret_cast<void**>(&d_sortedKeys),
-                inputBytes),
-            "cudaMalloc test sorted keys");
+        try
+        {
+            const std::size_t inputBytes =
+                sortedKeys.size() * sizeof(std::uint32_t);
 
-        checkCuda(
-            cudaMemcpy(
+            checkCuda(
+                cudaMalloc(
+                    reinterpret_cast<void**>(&d_sortedKeys),
+                    inputBytes),
+                "cudaMalloc test sorted keys");
+
+            checkCuda(
+                cudaMemcpy(
+                    d_sortedKeys,
+                    sortedKeys.data(),
+                    inputBytes,
+                    cudaMemcpyHostToDevice),
+                "copy test sorted keys to device");
+
+            allocateMortonLeafGroups(
+                groups,
+                static_cast<int>(sortedKeys.size()));
+
+            buildMortonLeafGroups(
+                groups,
                 d_sortedKeys,
-                sortedKeys.data(),
-                inputBytes,
-                cudaMemcpyHostToDevice),
-            "copy test sorted keys to device");
+                static_cast<int>(sortedKeys.size()));
 
-        allocateMortonLeafGroups(
-            groups,
-            static_cast<int>(sortedKeys.size()));
+            require(
+                groups.nParticles ==
+                    static_cast<int>(sortedKeys.size()),
+                "groups.nParticles is incorrect");
 
-        buildMortonLeafGroups(
-            groups,
-            d_sortedKeys,
-            static_cast<int>(sortedKeys.size()));
+            require(
+                groups.nGroups ==
+                    static_cast<int>(expectedUniqueKeys.size()),
+                "groups.nGroups is incorrect");
 
-        require(
-            groups.nParticles ==
-                static_cast<int>(sortedKeys.size()),
-            "groups.nParticles is incorrect");
+            require(
+                groups.capacity ==
+                    static_cast<int>(sortedKeys.size()),
+                "groups.capacity is incorrect");
 
-        require(
-            groups.nGroups ==
-                static_cast<int>(expectedUniqueKeys.size()),
-            "groups.nGroups is incorrect");
+            std::vector<std::uint32_t> actualUniqueKeys(
+                static_cast<std::size_t>(groups.nGroups));
 
-        require(
-            groups.capacity ==
-                static_cast<int>(sortedKeys.size()),
-            "groups.capacity is incorrect");
+            std::vector<int> actualFirstParticle(
+                static_cast<std::size_t>(groups.nGroups));
 
-        std::vector<std::uint32_t> actualUniqueKeys(
-            static_cast<std::size_t>(groups.nGroups));
+            std::vector<int> actualParticleCount(
+                static_cast<std::size_t>(groups.nGroups));
 
-        std::vector<int> actualFirstParticle(
-            static_cast<std::size_t>(groups.nGroups));
+            const std::size_t keyBytes =
+                static_cast<std::size_t>(groups.nGroups) *
+                sizeof(std::uint32_t);
 
-        std::vector<int> actualParticleCount(
-            static_cast<std::size_t>(groups.nGroups));
+            const std::size_t integerBytes =
+                static_cast<std::size_t>(groups.nGroups) *
+                sizeof(int);
 
-        const std::size_t keyBytes =
-            static_cast<std::size_t>(groups.nGroups) *
-            sizeof(std::uint32_t);
+            checkCuda(
+                cudaMemcpy(
+                    actualUniqueKeys.data(),
+                    groups.uniqueKeys,
+                    keyBytes,
+                    cudaMemcpyDeviceToHost),
+                "copy unique keys to host");
 
-        const std::size_t integerBytes =
-            static_cast<std::size_t>(groups.nGroups) *
-            sizeof(int);
+            checkCuda(
+                cudaMemcpy(
+                    actualFirstParticle.data(),
+                    groups.firstParticle,
+                    integerBytes,
+                    cudaMemcpyDeviceToHost),
+                "copy group offsets to host");
 
-        checkCuda(
-            cudaMemcpy(
-                actualUniqueKeys.data(),
-                groups.uniqueKeys,
-                keyBytes,
-                cudaMemcpyDeviceToHost),
-            "copy unique keys to host");
+            checkCuda(
+                cudaMemcpy(
+                    actualParticleCount.data(),
+                    groups.particleCount,
+                    integerBytes,
+                    cudaMemcpyDeviceToHost),
+                "copy group counts to host");
 
-        checkCuda(
-            cudaMemcpy(
-                actualFirstParticle.data(),
-                groups.firstParticle,
-                integerBytes,
-                cudaMemcpyDeviceToHost),
-            "copy group offsets to host");
+            requireVectorEqual(
+                actualUniqueKeys,
+                expectedUniqueKeys,
+                name + " uniqueKeys");
 
-        checkCuda(
-            cudaMemcpy(
-                actualParticleCount.data(),
-                groups.particleCount,
-                integerBytes,
-                cudaMemcpyDeviceToHost),
-            "copy group counts to host");
+            requireVectorEqual(
+                actualFirstParticle,
+                expectedFirstParticle,
+                name + " firstParticle");
 
-        requireVectorEqual(
-            actualUniqueKeys,
-            expectedUniqueKeys,
-            name + " uniqueKeys");
+            requireVectorEqual(
+                actualParticleCount,
+                expectedParticleCount,
+                name + " particleCount");
 
-        requireVectorEqual(
-            actualFirstParticle,
-            expectedFirstParticle,
-            name + " firstParticle");
+            validateInvariants(
+                sortedKeys,
+                actualUniqueKeys,
+                actualFirstParticle,
+                actualParticleCount);
+        }
+        catch (...)
+        {
+            freeMortonLeafGroups(groups);
+            cudaFree(d_sortedKeys);
+            throw;
+        }
 
-        requireVectorEqual(
-            actualParticleCount,
-            expectedParticleCount,
-            name + " particleCount");
-
-        validateInvariants(
-            sortedKeys,
-            actualUniqueKeys,
-            actualFirstParticle,
-            actualParticleCount);
-    }
-    catch (...)
-    {
         freeMortonLeafGroups(groups);
         cudaFree(d_sortedKeys);
-        throw;
+
+        std::cout
+            << "[PASS] "
+            << name
+            << '\n';
     }
 
-    freeMortonLeafGroups(groups);
-    cudaFree(d_sortedKeys);
+    void testCapacityValidation()
+    {
+        std::uint32_t* d_sortedKeys = nullptr;
+        MortonLeafGroups groups{};
 
-    std::cout
-        << "[PASS] "
-        << name
-        << '\n';
-}
+        try
+        {
+            const std::vector<std::uint32_t> sortedKeys{
+                1u,
+                2u,
+                3u
+            };
 
+            checkCuda(
+                cudaMalloc(
+                    reinterpret_cast<void**>(&d_sortedKeys),
+                    sortedKeys.size() * sizeof(std::uint32_t)),
+                "cudaMalloc capacity-test keys");
+
+            checkCuda(
+                cudaMemcpy(
+                    d_sortedKeys,
+                    sortedKeys.data(),
+                    sortedKeys.size() * sizeof(std::uint32_t),
+                    cudaMemcpyHostToDevice),
+                "copy capacity-test keys");
+
+            // Gli array possono contenere soltanto due elementi.
+            allocateMortonLeafGroups(groups, 2);
+
+            bool exceptionThrown = false;
+
+            try
+            {
+                // Tentativo di elaborare tre particelle.
+                buildMortonLeafGroups(
+                    groups,
+                    d_sortedKeys,
+                    3);
+            }
+            catch (const std::invalid_argument&)
+            {
+                exceptionThrown = true;
+            }
+
+            require(
+                exceptionThrown,
+                "buildMortonLeafGroups accepted an input "
+                "larger than its allocated capacity");
+        }
+        catch (...)
+        {
+            freeMortonLeafGroups(groups);
+            cudaFree(d_sortedKeys);
+            throw;
+        }
+
+        freeMortonLeafGroups(groups);
+        cudaFree(d_sortedKeys);
+
+        std::cout
+            << "[PASS] capacity validation\n";
+    }
 } // namespace
 
 int main()
@@ -317,6 +380,8 @@ int main()
             },
             {0, 2, 3},
             {2, 1, 2});
+        
+        testCapacityValidation();
 
         std::cout
             << "\nAll Morton leaf-group tests passed.\n";

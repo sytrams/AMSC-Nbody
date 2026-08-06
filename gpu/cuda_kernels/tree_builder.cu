@@ -14,16 +14,10 @@ void allocateDeviceArray(T*& pointer, std::size_t count, const char* name)
     if (count == 0)
         return;
 
-    const cudaError_t error = cudaMalloc(
-        reinterpret_cast<void**>(&pointer),
-        count * sizeof(T));
+    const cudaError_t error = cudaMalloc(reinterpret_cast<void**>(&pointer), count * sizeof(T));
 
     if (error != cudaSuccess)
-    {
-        throw std::runtime_error(
-            std::string("cudaMalloc ") + name + " failed: " +
-            cudaGetErrorString(error));
-    }
+        throw std::runtime_error(std::string("cudaMalloc ") + name + " failed: " + cudaGetErrorString(error));
 }
 
 } // namespace
@@ -150,6 +144,58 @@ __global__ void initializeLeavesKernel(Tree tree, const std::uint32_t* sortedInd
     tree.comZ[leaf] = positionZ[particleIndex];
 }
 
+__global__ void initializeGroupedLeavesKernel(Tree tree, const int* firstParticle, const int* particleCount, int nGroups, const std::uint32_t* sortedIndices, const float* particleMass, const float* positionX, const float* positionY, const float* positionZ)
+{
+    const int group =static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+
+    if (group >= nGroups)
+        return;
+
+    const int first = firstParticle[group];
+    const int count = particleCount[group];
+
+    float totalMass = 0.0f;
+    float weightedX = 0.0f;
+    float weightedY = 0.0f;
+    float weightedZ = 0.0f;
+
+    for (int localParticle = 0; localParticle < count; ++localParticle)
+    {
+        const int sortedPosition = first + localParticle;
+
+        const std::uint32_t particleIndex = sortedIndices[sortedPosition];
+
+        const float mass = particleMass[particleIndex];
+
+        totalMass += mass;
+
+        weightedX += mass * positionX[particleIndex];
+
+        weightedY += mass * positionY[particleIndex];
+
+        weightedZ += mass * positionZ[particleIndex];
+    }
+
+    tree.mass[group] = totalMass;
+
+    if (totalMass > 0.0f)
+    {
+        const float inverseMass = 1.0f / totalMass;
+
+        tree.comX[group] = weightedX * inverseMass;
+
+        tree.comY[group] = weightedY * inverseMass;
+
+        tree.comZ[group] = weightedZ * inverseMass;
+    }
+    else
+    {
+        tree.comX[group] = 0.0f;
+        tree.comY[group] = 0.0f;
+        tree.comZ[group] = 0.0f;
+    }
+}
+
 __global__ void computeCentersOfMassKernel(Tree tree, int N)
 {
     const int leaf = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
@@ -205,15 +251,8 @@ __global__ void computeCentersOfMassKernel(Tree tree, int N)
 //memory allocation
 void allocateTree(Tree& tree, int N)
 {
-    if (tree.left != nullptr || tree.right != nullptr ||
-        tree.parent != nullptr || tree.rangeFirst != nullptr ||
-        tree.rangeLast != nullptr || tree.prefixLength != nullptr ||
-        tree.visitCount != nullptr || tree.mass != nullptr ||
-        tree.comX != nullptr || tree.comY != nullptr ||
-        tree.comZ != nullptr)
-    {
+    if (tree.left != nullptr || tree.right != nullptr || tree.parent != nullptr || tree.rangeFirst != nullptr || tree.rangeLast != nullptr || tree.prefixLength != nullptr || tree.visitCount != nullptr || tree.mass != nullptr || tree.comX != nullptr || tree.comY != nullptr || tree.comZ != nullptr)
         throw std::logic_error("Tree memory is already allocated");
-    }
 
     if (N <= 0)
         throw std::invalid_argument("N must be positive");
@@ -227,14 +266,10 @@ void allocateTree(Tree& tree, int N)
         {
             allocateDeviceArray(tree.left, internalNodeCount, "tree.left");
             allocateDeviceArray(tree.right, internalNodeCount, "tree.right");
-            allocateDeviceArray(tree.rangeFirst, internalNodeCount,
-                                "tree.rangeFirst");
-            allocateDeviceArray(tree.rangeLast, internalNodeCount,
-                                "tree.rangeLast");
-            allocateDeviceArray(tree.prefixLength, internalNodeCount,
-                                "tree.prefixLength");
-            allocateDeviceArray(tree.visitCount, internalNodeCount,
-                                "tree.visitCount");
+            allocateDeviceArray(tree.rangeFirst, internalNodeCount, "tree.rangeFirst");
+            allocateDeviceArray(tree.rangeLast, internalNodeCount, "tree.rangeLast");
+            allocateDeviceArray(tree.prefixLength, internalNodeCount, "tree.prefixLength");
+            allocateDeviceArray(tree.visitCount, internalNodeCount, "tree.visitCount");
         }
 
         allocateDeviceArray(tree.parent, totalNodeCount, "tree.parent");
@@ -249,7 +284,7 @@ void allocateTree(Tree& tree, int N)
         throw;
     }
 
-    tree.nBodies = N;
+    tree.nLeaves = N;
     tree.nInternalNodes = N - 1;
 }
 
@@ -286,7 +321,7 @@ void freeTree(Tree& tree)
 
     tree.visitCount = nullptr;
 
-    tree.nBodies = 0;
+    tree.nLeaves = 0;
     tree.nInternalNodes = 0;
 }
 
@@ -296,7 +331,7 @@ void buildTree (Tree& tree, const std::uint32_t* d_sortedKeys, int N)
     if (N <= 0)
         throw std::invalid_argument("buildTree requires N >= 1");
 
-    if (tree.nBodies != N)
+    if (tree.nLeaves != N)
         throw std::invalid_argument("buildTree N does not match allocated tree size");
 
     if (tree.parent == nullptr)
@@ -339,12 +374,32 @@ void buildTree (Tree& tree, const std::uint32_t* d_sortedKeys, int N)
         throw std::runtime_error(std::string("buildTreeKernel execution: ") + cudaGetErrorString(error));
 }
 
+void buildTreeFromMortonGroups(Tree& tree, const MortonLeafGroups& groups)
+{
+    if (groups.nParticles <= 0)
+        throw std::invalid_argument("MortonLeafGroups has no particles");
+
+    if (groups.nGroups <= 0)
+        throw std::invalid_argument("MortonLeafGroups has no groups");
+    
+    if (groups.nGroups > groups.nParticles || groups.nParticles > groups.capacity)
+        throw std::logic_error("MortonLeafGroups metadata is inconsistent");
+
+    if (groups.uniqueKeys == nullptr)
+        throw std::logic_error("MortonLeafGroups uniqueKeys is not allocated");
+
+    if (tree.nLeaves != groups.nGroups)
+        throw std::invalid_argument("Tree leaf count does not match Morton group count");
+
+    buildTree(tree, groups.uniqueKeys, groups.nGroups);
+}
+
 void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, const float* d_mass, const float* d_positionX, const float* d_positionY, const float* d_positionZ, int N)
 {
     if (N <= 0)
         throw std::invalid_argument("computeCentersOfMass requires N >= 1");
 
-    if (tree.nBodies != N)
+    if (tree.nLeaves != N)
         throw std::invalid_argument("computeCentersOfMass N does not match tree size");
 
     if (d_sortedIndices == nullptr)
@@ -394,4 +449,76 @@ void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, cons
 
     if (error != cudaSuccess)
         throw std::runtime_error(std::string("computeCenterOfMassKernel execution failed: ") + cudaGetErrorString(error));
+}
+
+void computeGroupedCenterOfMass(Tree& tree, const MortonLeafGroups& groups, const std::uint32_t* d_sortedIndices, const float* d_mass, const float* d_positionX, const float* d_positionY, const float* d_positionZ)
+{
+    if (groups.nParticles <= 0)
+        throw std::invalid_argument("computeGroupedCenterOfMass requires at least one particle");
+
+    if (groups.nGroups <= 0)
+        throw std::invalid_argument("computeGroupedCenterOfMass requires at least one Morton group");
+
+    if (groups.nGroups > groups.nParticles || groups.nParticles > groups.capacity)
+        throw std::logic_error("MortonLeafGroups metadata is inconsistent");
+
+    if (tree.nLeaves != groups.nGroups)
+        throw std::invalid_argument("Tree leaf count does not match Morton group count");
+
+    if (groups.firstParticle == nullptr || groups.particleCount == nullptr)
+        throw std::logic_error("MortonLeafGroups arrays are not allocated");
+
+    if (d_sortedIndices == nullptr)
+        throw std::invalid_argument("d_sortedIndices must not be null");
+
+    if (d_mass == nullptr || d_positionX == nullptr || d_positionY == nullptr || d_positionZ == nullptr)
+        throw std::invalid_argument("Particle data arrays must not be null");
+
+    if (tree.parent == nullptr || tree.mass == nullptr || tree.comX == nullptr || tree.comY == nullptr || tree.comZ == nullptr)
+        throw std::logic_error("Tree memory has not been fully allocated");
+
+    const int nGroups = groups.nGroups;
+
+    if (nGroups > 1 && (tree.left == nullptr || tree.right == nullptr || tree.visitCount == nullptr))
+        throw std::logic_error("Tree internal-node memory has not been allocated");
+
+    constexpr int threadsPerBlock = 256;
+
+    const int blocks = (nGroups + threadsPerBlock - 1) / threadsPerBlock;
+
+    initializeGroupedLeavesKernel<<<blocks, threadsPerBlock>>>(tree, groups.firstParticle, groups.particleCount, nGroups, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ);
+
+    cudaError_t error = cudaGetLastError();
+
+    if (error != cudaSuccess)
+        throw std::runtime_error(std::string("initializeGroupedLeavesKernel launch failed: ") + cudaGetErrorString(error));
+
+    // With one unique Morton key, the only leaf is also
+    // the tree root. No bottom-up propagation is needed.
+    if (nGroups == 1)
+    {
+        error = cudaDeviceSynchronize();
+
+        if (error != cudaSuccess)
+            throw std::runtime_error(std::string("initializeGroupedLeavesKernel execution failed: ") + cudaGetErrorString(error));
+
+        return;
+    }
+
+    error = cudaMemset(tree.visitCount, 0, static_cast<std::size_t>(nGroups - 1) * sizeof(int));
+
+    if (error != cudaSuccess)
+        throw std::runtime_error(std::string("cudaMemset tree.visitCount failed: ") + cudaGetErrorString(error));
+
+    computeCentersOfMassKernel<<<blocks, threadsPerBlock>>>(tree, nGroups);
+
+    error = cudaGetLastError();
+
+    if (error != cudaSuccess)
+        throw std::runtime_error(std::string("computeCentersOfMassKernel launch failed: ") +cudaGetErrorString(error));
+
+    error = cudaDeviceSynchronize();
+
+    if (error != cudaSuccess)
+        throw std::runtime_error(std::string("computeCentersOfMassKernel execution failed: ") + cudaGetErrorString(error));
 }
