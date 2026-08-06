@@ -79,7 +79,7 @@ def start_vpn():
         ],
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
 
         text=True,
         start_new_session = True,
