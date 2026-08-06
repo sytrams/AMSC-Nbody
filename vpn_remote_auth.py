@@ -86,10 +86,17 @@ def start_vpn():
     )
 
     url_pattern = re.compile(r"https?://\S+")
+    waiting_for_auth_url = False
 
-    for line in gpclient.stderr:
+    for line in gpclient.stdout:
         # Show the initial program's output
         print(line, end="", flush=True)
+
+        if "Manual Authentication Required" in line:
+            waiting_for_auth_url = True
+
+        if not waiting_for_auth_url:
+            continue
 
         match = url_pattern.search(line)
         if not match:
@@ -98,26 +105,18 @@ def start_vpn():
         url = match.group(0).rstrip(".,);]")
 
         # helper.py receives the URL and prints the required response
-        callback = browser_session(url).strip()
+        callback = browser_session(url)
         if not callback or not callback.startswith("globalprotectcallback:"):
             gpclient.terminate()
             raise RuntimeError(
                 "Expected globalprotectcallback:, "
                 f"but browser_session returned {callback!r}"
             )
-            break
-        #response = result.stdout.rstrip("\n")
 
-        # Feed the string back to the still-running initial program
-        #initial.stdin.write(response + "\n")
-        #initial.stdin.flush()
-
-    gpclient.stdin.write(callback.rstrip("\r\n") + "\n")
-    gpclient.stdin.flush()
-    gpclient.stdin.close()
-    print(gpclient.pid)
-    for line in gpclient.stdout:
-            print(f"[gpclient] {line}", end="", flush=True)
+        # Keep stdin open so the gateway can request another remote login.
+        gpclient.stdin.write(callback.rstrip("\r\n") + "\n")
+        gpclient.stdin.flush()
+        waiting_for_auth_url = False
 
     return_code = gpclient.wait()
     print(f"gpclient exited with status {return_code}")
