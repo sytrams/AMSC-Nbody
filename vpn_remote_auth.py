@@ -60,7 +60,7 @@ def browser_session(url: str):
 
 def start_vpn():
     gpauth = subprocess.Popen(
-        ["gpauth", "--cookie-cache", required_secret("POLIMI_VPN"), "--browser", "remote"],
+        ["gpauth", required_secret("POLIMI_VPN"), "--browser", "remote"],
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         stdin=subprocess.PIPE,
@@ -103,8 +103,6 @@ def start_vpn():
                 f"but browser_session returned {callback!r}"
             )
             break
-        else:
-            break
         #response = result.stdout.rstrip("\n")
 
         # Feed the string back to the still-running initial program
@@ -115,6 +113,11 @@ def start_vpn():
     gpauth.stdin.flush()
     gpauth.stdin.close()
     print(gpclient.pid)
+    for line in gpclient.stdout:
+            print(f"[gpclient] {line}", end="", flush=True)
+
+    return_code = gpclient.wait()
+    print(f"gpclient exited with status {return_code}")
 
 
 if __name__ == "__main__":
