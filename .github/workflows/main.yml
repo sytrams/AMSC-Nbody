@@ -30,22 +30,38 @@ jobs:
           ls -l /dev/net/tun
 
       - name: Install GlobalProtect client
+        timeout-minutes: 10
         shell: bash
         run: |
           set -euxo pipefail
+          export DEBIAN_FRONTEND=noninteractive
 
-          sudo apt-get update
-          sudo apt-get install -y \
+          APT_OPTIONS=(
+            -o Acquire::Retries=3
+            -o Acquire::http::Timeout=30
+            -o Acquire::https::Timeout=30
+            -o Dpkg::Lock::Timeout=30
+            -o Dpkg::Use-Pty=0
+          )
+
+          timeout --signal=INT --kill-after=10s 4m \
+            sudo apt-get "${APT_OPTIONS[@]}" update
+          timeout --signal=INT --kill-after=10s 4m \
+            sudo apt-get "${APT_OPTIONS[@]}" install -y \
             software-properties-common \
             netcat-openbsd \
             openssh-client
 
-          sudo add-apt-repository \
-            --yes \
-            ppa:yuezk/globalprotect-openconnect
+          timeout --signal=INT --kill-after=10s 90s \
+            sudo add-apt-repository \
+              --yes \
+              ppa:yuezk/globalprotect-openconnect
 
-          sudo apt-get update
-          sudo apt-get install -y globalprotect-openconnect
+          timeout --signal=INT --kill-after=10s 4m \
+            sudo apt-get "${APT_OPTIONS[@]}" update
+          timeout --signal=INT --kill-after=10s 4m \
+            sudo apt-get "${APT_OPTIONS[@]}" install -y \
+              globalprotect-openconnect
 
           command -v gpclient
           command -v gpauth
