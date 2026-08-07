@@ -1,9 +1,15 @@
+from collections import deque
+from datetime import datetime, timezone
 from html import unescape
 import os
+from pathlib import Path
+from queue import Empty, Queue
 import re
 import subprocess
 import sys
+from threading import Thread
 from time import monotonic
+from typing import TextIO
 from urllib.parse import urlsplit
 
 import pyotp
@@ -13,7 +19,17 @@ from playwright.sync_api import BrowserContext, Locator, Page, sync_playwright
 CALLBACK_PREFIX = "globalprotectcallback:"
 CALLBACK_PATTERN = re.compile(r"globalprotectcallback:[^\s\"'<>]+", re.IGNORECASE)
 AUTH_TIMEOUT_SECONDS = 60
+AUTH_URL_TIMEOUT_SECONDS = 30
+VPN_READY_TIMEOUT_SECONDS = 180
+SSH_TIMEOUT_SECONDS = 30
+PROCESS_STOP_TIMEOUT_SECONDS = 15
 POLL_INTERVAL_MS = 250
+PROCESS_STARTED_AT = monotonic()
+
+VPN_READY_PATTERN = re.compile(
+    r"Connected to VPN|Wrote PID .*gpclient\.lock|Configured as .*tunnel",
+    re.IGNORECASE,
+)
 
 LOGIN_BUTTON_PATTERN = re.compile(r"log in|sign in|Accedi", re.IGNORECASE)
 OTP_BUTTON_PATTERN = re.compile(
@@ -49,6 +65,16 @@ ERROR_SELECTOR = (
     '[class*="error" i], '
     '[id*="error" i]'
 )
+
+
+def log_event(stage: str, message: str) -> None:
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
+    elapsed = monotonic() - PROCESS_STARTED_AT
+    print(
+        f"[vpn-auth {timestamp} +{elapsed:07.2f}s] {stage}: {message}",
+        file=sys.stderr,
+        flush=True,
+    )
 
 
 def required_secret(name: str) -> str:
@@ -167,7 +193,12 @@ def insert_credentials(
     button.click()
 
 
-def next_unused_otp(page: Page, previous_otp: str | None, deadline: float) -> str:
+def next_unused_otp(
+    page: Page,
+    previous_otp: str | None,
+    deadline: float,
+    stage: str,
+) -> str:
     totp = pyotp.TOTP(required_secret("POLIMI_TOTP"))
     announced_wait = False
 
@@ -180,11 +211,10 @@ def next_unused_otp(page: Page, previous_otp: str | None, deadline: float) -> st
             raise RuntimeError("Timed out waiting for a fresh OTP value.")
 
         if not announced_wait:
-            print(
-                "Gateway requested another OTP in the same TOTP window; "
-                "waiting for a fresh value.",
-                file=sys.stderr,
-                flush=True,
+            log_event(
+                stage,
+                "another OTP was requested in the same TOTP window; "
+                "waiting for a fresh value",
             )
             announced_wait = True
         page.wait_for_timeout(500)
@@ -195,8 +225,9 @@ def insert_otp(
     otp_field: Locator,
     previous_otp: str | None,
     deadline: float,
+    stage: str,
 ) -> str:
-    otp_code = next_unused_otp(page, previous_otp, deadline)
+    otp_code = next_unused_otp(page, previous_otp, deadline, stage)
     otp_field.fill(otp_code)
 
     button = first_visible(page.get_by_role("button", name=OTP_BUTTON_PATTERN))
@@ -294,10 +325,9 @@ def browser_session(
             callback = observed_callbacks[-1] if observed_callbacks else None
             callback = callback or get_callback(context)
             if callback:
-                print(
-                    f"Completed {stage} browser authentication.",
-                    file=sys.stderr,
-                    flush=True,
+                log_event(
+                    stage,
+                    f"browser authentication completed; callback_length={len(callback)}",
                 )
                 return callback, used_otp
             raise RuntimeError(
@@ -305,14 +335,15 @@ def browser_session(
                 f"{page_diagnostics(context, secrets)}"
             ) from exc
 
+        log_event(stage, f"browser page ready; {page_diagnostics(context, secrets)}")
+
         while monotonic() < deadline:
             callback = observed_callbacks[-1] if observed_callbacks else None
             callback = callback or get_callback(context)
             if callback:
-                print(
-                    f"Completed {stage} browser authentication.",
-                    file=sys.stderr,
-                    flush=True,
+                log_event(
+                    stage,
+                    f"browser authentication completed; callback_length={len(callback)}",
                 )
                 return callback, used_otp
 
@@ -329,11 +360,7 @@ def browser_session(
             login_controls = find_login_controls(context)
             if login_controls is not None and not credentials_submitted:
                 login_page, username_field, password_field = login_controls
-                print(
-                    f"Submitting credentials for {stage} authentication.",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                log_event(stage, "submitting credentials")
                 insert_credentials(
                     login_page,
                     username_field,
@@ -347,16 +374,13 @@ def browser_session(
             otp_control = find_otp_control(context)
             if otp_control is not None and not otp_submitted:
                 otp_page, otp_field = otp_control
-                print(
-                    f"Submitting OTP for {stage} authentication.",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                log_event(stage, "submitting OTP")
                 used_otp = insert_otp(
                     otp_page,
                     otp_field,
                     previous_otp,
                     deadline,
+                    stage,
                 )
                 secrets = (username, password, used_otp)
                 otp_submitted = True
@@ -365,11 +389,7 @@ def browser_session(
             confirmation_control = find_confirmation_control(context)
             if confirmation_control is not None and not confirmation_submitted:
                 _, confirmation_button = confirmation_control
-                print(
-                    f"Confirming {stage} browser authentication.",
-                    file=sys.stderr,
-                    flush=True,
-                )
+                log_event(stage, "confirming browser authentication")
                 confirmation_button.click()
                 confirmation_submitted = True
                 continue
@@ -395,19 +415,281 @@ def browser_session(
                 pass
 
 
-def start_vpn():
-    # gpauth = subprocess.Popen(
-    #     ["gpauth", required_secret("POLIMI_VPN"), "--browser", "remote"],
-    #     stdout=subprocess.PIPE,
-    #     stderr=subprocess.PIPE,
-    #     stdin=subprocess.PIPE,
-    #     text=True,
-    #     bufsize=1,
-    # )
+def read_process_output(stream: TextIO, output_queue: Queue[str | None]) -> None:
+    try:
+        for line in stream:
+            print(line, end="", flush=True)
+            output_queue.put(line)
+    finally:
+        output_queue.put(None)
+
+
+def recent_output_summary(
+    recent_lines: deque[str],
+    secrets: tuple[str, ...],
+) -> str:
+    if not recent_lines:
+        return "no gpclient output captured"
+    sanitized = [sanitize_text(line, secrets) for line in recent_lines]
+    return " | ".join(line for line in sanitized if line)[-2_000:]
+
+
+def stop_gpclient(
+    gpclient: subprocess.Popen[str],
+    output_thread: Thread,
+) -> None:
+    if gpclient.stdin is not None and not gpclient.stdin.closed:
+        try:
+            gpclient.stdin.close()
+        except Exception:
+            pass
+
+    if gpclient.poll() is None:
+        log_event("cleanup", "requesting GlobalProtect disconnect")
+        try:
+            result = subprocess.run(
+                ["sudo", "-n", "gpclient", "disconnect"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                timeout=PROCESS_STOP_TIMEOUT_SECONDS,
+                check=False,
+            )
+            log_event(
+                "cleanup",
+                f"disconnect command exited with status {result.returncode}",
+            )
+        except subprocess.TimeoutExpired:
+            log_event("cleanup", "disconnect command timed out")
+        except Exception as exc:
+            log_event(
+                "cleanup",
+                f"disconnect command failed: {type(exc).__name__}: {exc}",
+            )
+
+    try:
+        return_code = gpclient.wait(timeout=PROCESS_STOP_TIMEOUT_SECONDS)
+        log_event("cleanup", f"gpclient exited with status {return_code}")
+    except subprocess.TimeoutExpired:
+        log_event("cleanup", f"gpclient PID {gpclient.pid} did not exit; sending TERM")
+        try:
+            subprocess.run(
+                ["sudo", "-n", "kill", "-TERM", str(gpclient.pid)],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+                check=False,
+            )
+            try:
+                gpclient.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                log_event(
+                    "cleanup",
+                    f"gpclient PID {gpclient.pid} ignored TERM; sending KILL",
+                )
+                subprocess.run(
+                    ["sudo", "-n", "kill", "-KILL", str(gpclient.pid)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=5,
+                    check=False,
+                )
+                gpclient.wait(timeout=5)
+        except Exception as exc:
+            log_event(
+                "cleanup",
+                f"could not stop gpclient PID {gpclient.pid}: "
+                f"{type(exc).__name__}: {exc}",
+            )
+
+    output_thread.join(timeout=5)
+    if output_thread.is_alive():
+        log_event("cleanup", "gpclient output reader is still shutting down")
+
+
+def run_ssh_probe() -> None:
+    username = required_secret("SSH_USERNAME")
+    host = required_secret("CLUSTER_IP_ADDRESS")
+    identity_file = Path(
+        os.environ.get("SSH_IDENTITY_FILE", str(Path.home() / ".ssh" / "cineca"))
+    ).expanduser()
+    if not identity_file.is_file():
+        raise RuntimeError(f"SSH identity file does not exist: {identity_file}")
+
+    command = [
+        "ssh",
+        "-vv",
+        "-T",
+        "-i",
+        str(identity_file),
+        "-o",
+        "BatchMode=yes",
+        "-o",
+        "IdentitiesOnly=yes",
+        "-o",
+        "StrictHostKeyChecking=yes",
+        "-o",
+        "NumberOfPasswordPrompts=0",
+        "-o",
+        "ConnectTimeout=15",
+        "-o",
+        "ConnectionAttempts=1",
+        f"{username}@{host}",
+        "true",
+    ]
+
+    log_event(
+        "ssh",
+        f"starting noninteractive connectivity probe; timeout={SSH_TIMEOUT_SECONDS}s",
+    )
+    try:
+        result = subprocess.run(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=SSH_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        output = exc.stdout or ""
+        if isinstance(output, bytes):
+            output = output.decode(errors="replace")
+        sanitized = sanitize_text(output, (username, host))
+        if sanitized:
+            log_event("ssh-output", sanitized)
+        raise RuntimeError(
+            f"SSH connectivity probe timed out after {SSH_TIMEOUT_SECONDS}s"
+        ) from exc
+
+    sanitized_output = sanitize_text(result.stdout or "", (username, host))
+    if sanitized_output:
+        log_event("ssh-output", sanitized_output)
+    if result.returncode != 0:
+        raise RuntimeError(
+            f"SSH connectivity probe exited with status {result.returncode}"
+        )
+    log_event("ssh", "connectivity probe succeeded")
+
+
+def wait_for_vpn_ready(
+    context: BrowserContext,
+    gpclient: subprocess.Popen[str],
+    output_queue: Queue[str | None],
+) -> None:
+    assert gpclient.stdin is not None
+
+    url_pattern = re.compile(r"https?://[^\s)\]]+")
+    waiting_for_auth_url = False
+    auth_url_deadline: float | None = None
+    vpn_deadline = monotonic() + VPN_READY_TIMEOUT_SECONDS
+    auth_round = 0
+    previous_otp: str | None = None
+    recent_lines: deque[str] = deque(maxlen=12)
+    runtime_secrets = tuple(
+        os.environ.get(name, "")
+        for name in (
+            "POLIMI_USERNAME",
+            "POLIMI_PASSWORD",
+            "POLIMI_TOTP",
+            "POLIMI_VPN",
+        )
+    )
+
+    log_event(
+        "gpclient",
+        f"waiting for VPN readiness; timeout={VPN_READY_TIMEOUT_SECONDS}s",
+    )
+
+    while monotonic() < vpn_deadline:
+        now = monotonic()
+        if auth_url_deadline is not None and now >= auth_url_deadline:
+            raise RuntimeError(
+                f"gpclient announced manual authentication but did not provide a URL "
+                f"within {AUTH_URL_TIMEOUT_SECONDS}s; "
+                f"recent_output={recent_output_summary(recent_lines, runtime_secrets)}"
+            )
+
+        if gpclient.poll() is not None and output_queue.empty():
+            raise RuntimeError(
+                f"gpclient exited before VPN readiness with status {gpclient.returncode}; "
+                f"recent_output={recent_output_summary(recent_lines, runtime_secrets)}"
+            )
+
+        try:
+            line = output_queue.get(timeout=0.5)
+        except Empty:
+            continue
+
+        if line is None:
+            if gpclient.poll() is None:
+                continue
+            raise RuntimeError(
+                f"gpclient output ended before VPN readiness with status "
+                f"{gpclient.returncode}; "
+                f"recent_output={recent_output_summary(recent_lines, runtime_secrets)}"
+            )
+
+        recent_lines.append(line.strip())
+
+        if VPN_READY_PATTERN.search(line):
+            log_event("gpclient", "VPN readiness marker detected")
+            return
+
+        if "Manual Authentication Required" in line:
+            waiting_for_auth_url = True
+            auth_url_deadline = monotonic() + AUTH_URL_TIMEOUT_SECONDS
+            log_event("gpclient", "manual browser authentication requested")
+            continue
+
+        if not waiting_for_auth_url:
+            continue
+
+        match = url_pattern.search(line)
+        if not match:
+            continue
+
+        url = match.group(0).rstrip(".,);]")
+        auth_round += 1
+        if auth_round == 1:
+            stage = "portal"
+        elif auth_round == 2:
+            stage = "gateway"
+        else:
+            stage = f"authentication-round-{auth_round}"
+
+        log_event(stage, "received one-use remote-browser URL")
+        callback, previous_otp = browser_session(
+            context,
+            url,
+            stage,
+            previous_otp,
+        )
+        if not callback.lower().startswith(CALLBACK_PREFIX):
+            raise RuntimeError(
+                f"Expected {CALLBACK_PREFIX}, but browser authentication "
+                "did not return a valid callback."
+            )
+
+        gpclient.stdin.write(callback.rstrip("\r\n") + "\n")
+        gpclient.stdin.flush()
+        log_event(stage, f"callback forwarded to gpclient; length={len(callback)}")
+        waiting_for_auth_url = False
+        auth_url_deadline = None
+
+    raise RuntimeError(
+        f"VPN readiness was not detected within {VPN_READY_TIMEOUT_SECONDS}s; "
+        f"recent_output={recent_output_summary(recent_lines, runtime_secrets)}"
+    )
+
+
+def start_vpn() -> int:
+    log_event("startup", "launching shared headless browser context")
 
     with sync_playwright() as playwright:
         browser = playwright.chromium.launch(headless=True)
         context = browser.new_context()
+        log_event("startup", "launching gpclient with remote-browser authentication")
         gpclient = subprocess.Popen(
             [
                 "sudo",
@@ -421,69 +703,32 @@ def start_vpn():
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
+            bufsize=1,
             start_new_session=True,
         )
 
+        assert gpclient.stdout is not None
+        output_queue: Queue[str | None] = Queue()
+        output_thread = Thread(
+            target=read_process_output,
+            args=(gpclient.stdout, output_queue),
+            name="gpclient-output",
+            daemon=True,
+        )
+        output_thread.start()
+
         try:
-            assert gpclient.stdout is not None
-            assert gpclient.stdin is not None
-
-            url_pattern = re.compile(r"https?://[^\s)\]]+")
-            waiting_for_auth_url = False
-            auth_round = 0
-            previous_otp: str | None = None
-
-            for line in gpclient.stdout:
-                # Show the initial program's output.
-                print(line, end="", flush=True)
-
-                if "Manual Authentication Required" in line:
-                    waiting_for_auth_url = True
-
-                if not waiting_for_auth_url:
-                    continue
-
-                match = url_pattern.search(line)
-                if not match:
-                    continue
-
-                url = match.group(0).rstrip(".,);]")
-                auth_round += 1
-                if auth_round == 1:
-                    stage = "portal"
-                elif auth_round == 2:
-                    stage = "gateway"
-                else:
-                    stage = f"authentication round {auth_round}"
-
-                callback, previous_otp = browser_session(
-                    context,
-                    url,
-                    stage,
-                    previous_otp,
-                )
-                if not callback.lower().startswith(CALLBACK_PREFIX):
-                    raise RuntimeError(
-                        f"Expected {CALLBACK_PREFIX}, but browser authentication "
-                        "did not return a valid callback."
-                    )
-
-                # Keep stdin open so the gateway can request another remote login.
-                gpclient.stdin.write(callback.rstrip("\r\n") + "\n")
-                gpclient.stdin.flush()
-                waiting_for_auth_url = False
-
-            return_code = gpclient.wait()
-            print(f"gpclient exited with status {return_code}")
-            return return_code
-        except Exception:
-            if gpclient.poll() is None:
-                gpclient.terminate()
-            raise
+            wait_for_vpn_ready(context, gpclient, output_queue)
+            run_ssh_probe()
+            return 0
         finally:
-            context.close()
-            browser.close()
+            try:
+                stop_gpclient(gpclient, output_thread)
+            finally:
+                context.close()
+                browser.close()
+                log_event("cleanup", "browser and VPN resources released")
 
 
 if __name__ == "__main__":
-    start_vpn()
+    raise SystemExit(start_vpn())

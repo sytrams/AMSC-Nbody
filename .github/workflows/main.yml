@@ -74,17 +74,19 @@ jobs:
 
           python -m playwright install --with-deps chromium
 
-      - name: Authenticate, connect VPN, and run SSH
+      - name: Authenticate, connect VPN, and verify SSH
         shell: bash
         env:
           POLIMI_USERNAME: ${{secrets.POLIMI_USER}}
           SSH_USERNAME: ${{secrets.SSH_USER}}
+          CLUSTER_IP_ADDRESS: ${{secrets.CLUSTER_IP_ADDRESS}}
           POLIMI_PASSWORD: ${{secrets.POLIMI_PASSWORD}}
           POLIMI_TOTP: ${{secrets.POLIMI_TOTP}}
           POLIMI_VPN: ${{secrets.POLIMI_VPN}}
+          PYTHONUNBUFFERED: "1"
         run: |
-          python3 vpn_remote_auth.py
-          ssh ${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}
+          timeout --signal=INT --kill-after=15s 6m \
+            python3 vpn_remote_auth.py
 
       - name: Emergency VPN cleanup
         if: always()
