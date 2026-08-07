@@ -1,13 +1,16 @@
 from collections import deque
+from dataclasses import dataclass
 from datetime import datetime, timezone
-from html import unescape
+from html import escape, unescape
+import json
 import os
 from pathlib import Path
 from queue import Empty, Queue
 import re
+import signal
 import subprocess
 import sys
-from threading import Thread
+from threading import Event, Thread
 from time import monotonic
 from typing import TextIO
 from urllib.parse import urlsplit
@@ -18,10 +21,15 @@ from playwright.sync_api import BrowserContext, Locator, Page, sync_playwright
 
 CALLBACK_PREFIX = "globalprotectcallback:"
 CALLBACK_PATTERN = re.compile(r"globalprotectcallback:[^\s\"'<>]+", re.IGNORECASE)
+HTTP_URL_PATTERN = re.compile(r"https?://[^\s)\]]+", re.IGNORECASE)
+UUID_PATTERN = re.compile(
+    r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
+    r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
+    re.IGNORECASE,
+)
 AUTH_TIMEOUT_SECONDS = 60
 AUTH_URL_TIMEOUT_SECONDS = 30
 VPN_READY_TIMEOUT_SECONDS = 180
-SSH_TIMEOUT_SECONDS = 30
 PROCESS_STOP_TIMEOUT_SECONDS = 15
 POLL_INTERVAL_MS = 250
 PROCESS_STARTED_AT = monotonic()
@@ -67,6 +75,35 @@ ERROR_SELECTOR = (
 )
 
 
+class ShutdownRequested(Exception):
+    """Raised when the workflow asks the background VPN process to stop."""
+
+
+@dataclass
+class VpnDiagnostics:
+    directory: Path
+    stage: str = "startup"
+    result: str = "starting"
+    page_title: str | None = None
+    credential_form_visible: bool = False
+    otp_form_visible: bool = False
+    callback_found: bool = False
+    error: str | None = None
+    elapsed_seconds: float = 0.0
+
+    def payload(self) -> dict[str, str | bool | float | None]:
+        return {
+            "stage": self.stage,
+            "result": self.result,
+            "page_title": self.page_title,
+            "credential_form_visible": self.credential_form_visible,
+            "otp_form_visible": self.otp_form_visible,
+            "callback_found": self.callback_found,
+            "error": self.error,
+            "elapsed_seconds": self.elapsed_seconds,
+        }
+
+
 def log_event(stage: str, message: str) -> None:
     timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     elapsed = monotonic() - PROCESS_STARTED_AT
@@ -82,6 +119,63 @@ def required_secret(name: str) -> str:
     if not value:
         raise RuntimeError(f"Required secret {name} is missing")
     return value
+
+
+def required_status_path(name: str) -> Path:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"Required status-file environment variable {name} is missing"
+        )
+    path = Path(value).expanduser()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def required_directory(name: str) -> Path:
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"Required directory environment variable {name} is missing"
+        )
+    path = Path(value).expanduser()
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def runtime_secrets() -> tuple[str, ...]:
+    return tuple(
+        os.environ.get(name, "")
+        for name in (
+            "POLIMI_USERNAME",
+            "POLIMI_PASSWORD",
+            "POLIMI_TOTP",
+            "POLIMI_VPN",
+        )
+    )
+
+
+def remove_status_file(path: Path) -> None:
+    path.unlink(missing_ok=True)
+
+
+def write_status_file(path: Path, message: str) -> None:
+    temporary_path = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary_path.write_text(message.rstrip() + "\n", encoding="utf-8")
+        os.replace(temporary_path, path)
+    finally:
+        temporary_path.unlink(missing_ok=True)
+
+
+def install_shutdown_handlers(shutdown_event: Event) -> None:
+    def request_shutdown(signum: int, _frame) -> None:
+        signal_name = signal.Signals(signum).name
+        log_event("lifecycle", f"received {signal_name}; shutdown requested")
+        shutdown_event.set()
+
+    signal.signal(signal.SIGINT, request_shutdown)
+    signal.signal(signal.SIGTERM, request_shutdown)
 
 
 def normalize_callback(value: str | None) -> str | None:
@@ -237,11 +331,28 @@ def insert_otp(
     return otp_code
 
 
-def sanitize_text(text: str, secrets: tuple[str, ...]) -> str:
+def redact_sensitive_values(text: str, secrets: tuple[str, ...]) -> str:
     sanitized = CALLBACK_PATTERN.sub("[callback redacted]", text)
+    sanitized = UUID_PATTERN.sub("[identifier redacted]", sanitized)
+
+    def redact_url(match: re.Match[str]) -> str:
+        parsed = urlsplit(match.group(0).rstrip(".,;"))
+        hostname = parsed.hostname or "host"
+        try:
+            port = f":{parsed.port}" if parsed.port is not None else ""
+        except ValueError:
+            port = ""
+        return f"{parsed.scheme}://{hostname}{port}/[url redacted]"
+
+    sanitized = HTTP_URL_PATTERN.sub(redact_url, sanitized)
     for secret in secrets:
         if secret:
             sanitized = sanitized.replace(secret, "[redacted]")
+    return sanitized
+
+
+def sanitize_text(text: str, secrets: tuple[str, ...]) -> str:
+    sanitized = redact_sensitive_values(text, secrets)
     return " ".join(sanitized.split())[:500]
 
 
@@ -270,7 +381,7 @@ def page_diagnostics(context: BrowserContext, secrets: tuple[str, ...]) -> str:
             if parsed.scheme.lower() == "globalprotectcallback":
                 location = f"{CALLBACK_PREFIX}[redacted]"
             elif parsed.hostname:
-                location = f"{parsed.scheme}://{parsed.hostname}{parsed.path}"
+                location = f"{parsed.scheme}://{parsed.hostname}/[path redacted]"
             else:
                 location = parsed.scheme or "unknown"
             title = sanitize_text(page.title(), secrets)
@@ -290,6 +401,161 @@ def page_diagnostics(context: BrowserContext, secrets: tuple[str, ...]) -> str:
     return details
 
 
+def prepare_diagnostics(diagnostics: VpnDiagnostics) -> None:
+    for name in ("summary.md", "failure.json", "failure.png"):
+        (diagnostics.directory / name).unlink(missing_ok=True)
+
+
+def capture_page_state(
+    diagnostics: VpnDiagnostics,
+    context: BrowserContext,
+) -> None:
+    secrets = runtime_secrets()
+    pages = active_pages(context)
+    if pages:
+        try:
+            diagnostics.page_title = sanitize_text(pages[0].title(), secrets) or None
+        except Exception:
+            diagnostics.page_title = None
+
+    diagnostics.credential_form_visible = find_login_controls(context) is not None
+    diagnostics.otp_form_visible = find_otp_control(context) is not None
+    errors = visible_errors(context, secrets)
+    if errors and not diagnostics.error:
+        diagnostics.error = errors[0]
+
+
+def write_diagnostic_summary(diagnostics: VpnDiagnostics) -> None:
+    lines = [
+        f"- VPN result: `{diagnostics.result}`",
+        f"- Stage: `{diagnostics.stage}`",
+        f"- Elapsed time: `{diagnostics.elapsed_seconds:.2f} seconds`",
+    ]
+    if diagnostics.page_title:
+        lines.append(f"- Page title: {diagnostics.page_title}")
+    lines.extend(
+        (
+            "- Credential form detected: "
+            + ("yes" if diagnostics.credential_form_visible else "no"),
+            "- OTP form detected: "
+            + ("yes" if diagnostics.otp_form_visible else "no"),
+            "- Callback detected: "
+            + ("yes" if diagnostics.callback_found else "no"),
+        )
+    )
+    if diagnostics.error:
+        lines.append(f"- Error: {diagnostics.error}")
+
+    (diagnostics.directory / "summary.md").write_text(
+        "\n".join(lines) + "\n",
+        encoding="utf-8",
+    )
+
+
+def write_failure_png(
+    diagnostics: VpnDiagnostics,
+    context: BrowserContext,
+) -> None:
+    fields = [
+        ("Result", diagnostics.result),
+        ("Stage", diagnostics.stage),
+        ("Page title", diagnostics.page_title or "Not available"),
+        (
+            "Credential form detected",
+            "Yes" if diagnostics.credential_form_visible else "No",
+        ),
+        ("OTP form detected", "Yes" if diagnostics.otp_form_visible else "No"),
+        ("Callback detected", "Yes" if diagnostics.callback_found else "No"),
+        ("Error", diagnostics.error or "No browser error was visible"),
+        ("Elapsed", f"{diagnostics.elapsed_seconds:.2f} seconds"),
+    ]
+    rows = "".join(
+        "<tr><th>"
+        + escape(label)
+        + "</th><td>"
+        + escape(str(value))
+        + "</td></tr>"
+        for label, value in fields
+    )
+    html = f"""
+        <!doctype html>
+        <html lang="en">
+          <head>
+            <meta charset="utf-8">
+            <style>
+              body {{ background: #f6f8fa; color: #1f2328; font: 16px sans-serif; }}
+              main {{ background: white; border: 1px solid #d0d7de; border-radius: 12px;
+                      margin: 40px auto; max-width: 850px; padding: 32px; }}
+              h1 {{ margin-top: 0; }}
+              table {{ border-collapse: collapse; width: 100%; }}
+              th, td {{ border-top: 1px solid #d8dee4; padding: 12px; text-align: left; }}
+              th {{ width: 35%; }}
+              .notice {{ color: #57606a; font-size: 14px; }}
+            </style>
+          </head>
+          <body>
+            <main>
+              <h1>VPN authentication failure</h1>
+              <p class="notice">Sanitized diagnostic card; no authentication page,
+              callback, cookie, username, password, or OTP is included.</p>
+              <table>{rows}</table>
+            </main>
+          </body>
+        </html>
+    """
+
+    diagnostic_page = context.new_page()
+    try:
+        diagnostic_page.set_content(html, wait_until="domcontentloaded")
+        diagnostic_page.screenshot(
+            path=str(diagnostics.directory / "failure.png"),
+            full_page=True,
+        )
+    finally:
+        diagnostic_page.close()
+
+
+def record_failure(
+    diagnostics: VpnDiagnostics,
+    exc: Exception,
+    context: BrowserContext | None = None,
+) -> None:
+    diagnostics.result = "failed"
+    diagnostics.elapsed_seconds = round(monotonic() - PROCESS_STARTED_AT, 2)
+    diagnostics.error = sanitize_text(str(exc), runtime_secrets()) or type(exc).__name__
+    if context is not None:
+        capture_page_state(diagnostics, context)
+
+    write_diagnostic_summary(diagnostics)
+    (diagnostics.directory / "failure.json").write_text(
+        json.dumps(diagnostics.payload(), indent=2, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    if context is not None:
+        try:
+            write_failure_png(diagnostics, context)
+        except Exception as screenshot_exc:
+            log_event(
+                "diagnostics",
+                "could not create sanitized failure image: "
+                f"{type(screenshot_exc).__name__}",
+            )
+
+    log_event(
+        "diagnostics",
+        f"wrote sanitized failure diagnostics for stage={diagnostics.stage}",
+    )
+
+
+def record_connection_success(diagnostics: VpnDiagnostics) -> None:
+    diagnostics.stage = "vpn"
+    diagnostics.result = "connected"
+    diagnostics.elapsed_seconds = round(monotonic() - PROCESS_STARTED_AT, 2)
+    diagnostics.error = None
+    write_diagnostic_summary(diagnostics)
+    log_event("diagnostics", "wrote sanitized VPN connection summary")
+
+
 def browser_session(
     context: BrowserContext,
     url: str,
@@ -305,6 +571,7 @@ def browser_session(
     confirmation_submitted = False
     used_otp = previous_otp
     observed_callbacks: list[str] = []
+    preserve_pages_for_diagnostics = False
 
     def observe_request(request) -> None:
         callback = normalize_callback(request.url)
@@ -405,20 +672,25 @@ def browser_session(
             f"Timed out after {AUTH_TIMEOUT_SECONDS}s waiting for {stage} "
             f"authentication; {page_diagnostics(context, secrets)}"
         )
+    except Exception:
+        preserve_pages_for_diagnostics = True
+        raise
     finally:
         context.remove_listener("request", observe_request)
-        # Pages are disposable; the shared context retains the IdP cookies.
-        for auth_page in active_pages(context):
-            try:
-                auth_page.close()
-            except Exception:
-                pass
+        if not preserve_pages_for_diagnostics:
+            # Pages are disposable; the shared context retains the IdP cookies.
+            for auth_page in active_pages(context):
+                try:
+                    auth_page.close()
+                except Exception:
+                    pass
 
 
 def read_process_output(stream: TextIO, output_queue: Queue[str | None]) -> None:
+    secrets = runtime_secrets()
     try:
         for line in stream:
-            print(line, end="", flush=True)
+            print(redact_sensitive_values(line, secrets), end="", flush=True)
             output_queue.put(line)
     finally:
         output_queue.put(None)
@@ -507,75 +779,12 @@ def stop_gpclient(
         log_event("cleanup", "gpclient output reader is still shutting down")
 
 
-def run_ssh_probe() -> None:
-    username = required_secret("SSH_USERNAME")
-    host = required_secret("CLUSTER_IP_ADDRESS")
-    identity_file = Path(
-        os.environ.get("SSH_IDENTITY_FILE", str(Path.home() / ".ssh" / "cineca"))
-    ).expanduser()
-    if not identity_file.is_file():
-        raise RuntimeError(f"SSH identity file does not exist: {identity_file}")
-
-    command = [
-        "ssh",
-        "-vv",
-        "-T",
-        "-i",
-        str(identity_file),
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        "IdentitiesOnly=yes",
-        "-o",
-        "StrictHostKeyChecking=yes",
-        "-o",
-        "NumberOfPasswordPrompts=0",
-        "-o",
-        "ConnectTimeout=15",
-        "-o",
-        "ConnectionAttempts=1",
-        f"{username}@{host}",
-        "true",
-    ]
-
-    log_event(
-        "ssh",
-        f"starting noninteractive connectivity probe; timeout={SSH_TIMEOUT_SECONDS}s",
-    )
-    try:
-        result = subprocess.run(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            timeout=SSH_TIMEOUT_SECONDS,
-            check=False,
-        )
-    except subprocess.TimeoutExpired as exc:
-        output = exc.stdout or ""
-        if isinstance(output, bytes):
-            output = output.decode(errors="replace")
-        sanitized = sanitize_text(output, (username, host))
-        if sanitized:
-            log_event("ssh-output", sanitized)
-        raise RuntimeError(
-            f"SSH connectivity probe timed out after {SSH_TIMEOUT_SECONDS}s"
-        ) from exc
-
-    sanitized_output = sanitize_text(result.stdout or "", (username, host))
-    if sanitized_output:
-        log_event("ssh-output", sanitized_output)
-    if result.returncode != 0:
-        raise RuntimeError(
-            f"SSH connectivity probe exited with status {result.returncode}"
-        )
-    log_event("ssh", "connectivity probe succeeded")
-
-
 def wait_for_vpn_ready(
     context: BrowserContext,
     gpclient: subprocess.Popen[str],
     output_queue: Queue[str | None],
+    shutdown_event: Event,
+    diagnostics: VpnDiagnostics,
 ) -> None:
     assert gpclient.stdin is not None
 
@@ -586,15 +795,9 @@ def wait_for_vpn_ready(
     auth_round = 0
     previous_otp: str | None = None
     recent_lines: deque[str] = deque(maxlen=12)
-    runtime_secrets = tuple(
-        os.environ.get(name, "")
-        for name in (
-            "POLIMI_USERNAME",
-            "POLIMI_PASSWORD",
-            "POLIMI_TOTP",
-            "POLIMI_VPN",
-        )
-    )
+    secrets = runtime_secrets()
+    diagnostics.stage = "vpn"
+    diagnostics.result = "connecting"
 
     log_event(
         "gpclient",
@@ -602,18 +805,21 @@ def wait_for_vpn_ready(
     )
 
     while monotonic() < vpn_deadline:
+        if shutdown_event.is_set():
+            raise ShutdownRequested
+
         now = monotonic()
         if auth_url_deadline is not None and now >= auth_url_deadline:
             raise RuntimeError(
                 f"gpclient announced manual authentication but did not provide a URL "
                 f"within {AUTH_URL_TIMEOUT_SECONDS}s; "
-                f"recent_output={recent_output_summary(recent_lines, runtime_secrets)}"
+                f"recent_output={recent_output_summary(recent_lines, secrets)}"
             )
 
         if gpclient.poll() is not None and output_queue.empty():
             raise RuntimeError(
                 f"gpclient exited before VPN readiness with status {gpclient.returncode}; "
-                f"recent_output={recent_output_summary(recent_lines, runtime_secrets)}"
+                f"recent_output={recent_output_summary(recent_lines, secrets)}"
             )
 
         try:
@@ -627,7 +833,7 @@ def wait_for_vpn_ready(
             raise RuntimeError(
                 f"gpclient output ended before VPN readiness with status "
                 f"{gpclient.returncode}; "
-                f"recent_output={recent_output_summary(recent_lines, runtime_secrets)}"
+                f"recent_output={recent_output_summary(recent_lines, secrets)}"
             )
 
         recent_lines.append(line.strip())
@@ -658,6 +864,12 @@ def wait_for_vpn_ready(
         else:
             stage = f"authentication-round-{auth_round}"
 
+        diagnostics.stage = stage
+        diagnostics.result = "authenticating"
+        diagnostics.page_title = None
+        diagnostics.credential_form_visible = False
+        diagnostics.otp_form_visible = False
+        diagnostics.callback_found = False
         log_event(stage, "received one-use remote-browser URL")
         callback, previous_otp = browser_session(
             context,
@@ -673,17 +885,62 @@ def wait_for_vpn_ready(
 
         gpclient.stdin.write(callback.rstrip("\r\n") + "\n")
         gpclient.stdin.flush()
-        log_event(stage, f"callback forwarded to gpclient; length={len(callback)}")
+        diagnostics.callback_found = True
+        log_event(
+            stage,
+            f"authentication succeeded; callback_detected=yes; "
+            f"callback_length={len(callback)}",
+        )
         waiting_for_auth_url = False
         auth_url_deadline = None
 
     raise RuntimeError(
         f"VPN readiness was not detected within {VPN_READY_TIMEOUT_SECONDS}s; "
-        f"recent_output={recent_output_summary(recent_lines, runtime_secrets)}"
+        f"recent_output={recent_output_summary(recent_lines, secrets)}"
     )
 
 
-def start_vpn() -> int:
+def wait_for_shutdown(
+    gpclient: subprocess.Popen[str],
+    output_queue: Queue[str | None],
+    shutdown_event: Event,
+) -> None:
+    recent_lines: deque[str] = deque(maxlen=12)
+    runtime_secrets = tuple(
+        os.environ.get(name, "")
+        for name in (
+            "POLIMI_USERNAME",
+            "POLIMI_PASSWORD",
+            "POLIMI_TOTP",
+            "POLIMI_VPN",
+        )
+    )
+
+    log_event("lifecycle", "VPN is ready and will remain connected until cancelled")
+    while not shutdown_event.wait(0.5):
+        while True:
+            try:
+                line = output_queue.get_nowait()
+            except Empty:
+                break
+            if line is not None:
+                recent_lines.append(line.strip())
+
+        if gpclient.poll() is not None:
+            raise RuntimeError(
+                f"gpclient exited while the VPN was expected to remain connected "
+                f"with status {gpclient.returncode}; "
+                f"recent_output={recent_output_summary(recent_lines, runtime_secrets)}"
+            )
+
+    log_event("lifecycle", "workflow requested VPN shutdown")
+
+
+def start_vpn(
+    ready_file: Path,
+    shutdown_event: Event,
+    diagnostics: VpnDiagnostics,
+) -> int:
     log_event("startup", "launching shared headless browser context")
 
     with sync_playwright() as playwright:
@@ -718,9 +975,24 @@ def start_vpn() -> int:
         output_thread.start()
 
         try:
-            wait_for_vpn_ready(context, gpclient, output_queue)
-            run_ssh_probe()
+            wait_for_vpn_ready(
+                context,
+                gpclient,
+                output_queue,
+                shutdown_event,
+                diagnostics,
+            )
+            record_connection_success(diagnostics)
+            write_status_file(ready_file, "ready")
+            log_event("status", f"published VPN readiness in {ready_file.name}")
+            wait_for_shutdown(gpclient, output_queue, shutdown_event)
             return 0
+        except ShutdownRequested:
+            raise
+        except Exception as exc:
+            if diagnostics.result != "failed":
+                record_failure(diagnostics, exc, context)
+            raise
         finally:
             try:
                 stop_gpclient(gpclient, output_thread)
@@ -730,5 +1002,33 @@ def start_vpn() -> int:
                 log_event("cleanup", "browser and VPN resources released")
 
 
+def main() -> int:
+    diagnostics = VpnDiagnostics(required_directory("VPN_DIAGNOSTICS_DIR"))
+    prepare_diagnostics(diagnostics)
+    ready_file = required_status_path("VPN_READY_FILE")
+    failed_file = required_status_path("VPN_FAILED_FILE")
+    remove_status_file(ready_file)
+    remove_status_file(failed_file)
+
+    shutdown_event = Event()
+    install_shutdown_handlers(shutdown_event)
+
+    try:
+        return start_vpn(ready_file, shutdown_event, diagnostics)
+    except ShutdownRequested:
+        log_event("lifecycle", "shutdown completed before VPN readiness")
+        return 0
+    except Exception as exc:
+        remove_status_file(ready_file)
+        if diagnostics.result != "failed":
+            record_failure(diagnostics, exc)
+        failure = f"{type(exc).__name__}: {sanitize_text(str(exc), runtime_secrets())}"
+        write_status_file(failed_file, failure)
+        log_event("status", f"published VPN failure in {failed_file.name}: {failure}")
+        raise
+    finally:
+        remove_status_file(ready_file)
+
+
 if __name__ == "__main__":
-    raise SystemExit(start_vpn())
+    raise SystemExit(main())

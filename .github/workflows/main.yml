@@ -90,24 +90,85 @@ jobs:
 
           python -m playwright install --with-deps chromium
 
-      - name: Authenticate, connect VPN, and verify SSH
+      - name: Authenticate and keep VPN connected
+        id: vpn
+        background: true
         shell: bash
         env:
           POLIMI_USERNAME: ${{secrets.POLIMI_USER}}
-          SSH_USERNAME: ${{secrets.SSH_USER}}
-          CLUSTER_IP_ADDRESS: ${{secrets.CLUSTER_IP_ADDRESS}}
           POLIMI_PASSWORD: ${{secrets.POLIMI_PASSWORD}}
           POLIMI_TOTP: ${{secrets.POLIMI_TOTP}}
           POLIMI_VPN: ${{secrets.POLIMI_VPN}}
+          VPN_READY_FILE: ${{ runner.temp }}/vpn-ready
+          VPN_FAILED_FILE: ${{ runner.temp }}/vpn-failed
+          VPN_DIAGNOSTICS_DIR: ${{ runner.temp }}/vpn-auth-diagnostics
           PYTHONUNBUFFERED: "1"
         run: |
-          timeout --signal=INT --kill-after=15s 6m \
-            python3 vpn_remote_auth.py
+          exec python3 vpn_remote_auth.py
+
+      - name: Wait for VPN readiness
+        id: vpn_wait
+        shell: bash
+        run: |
+          for attempt in {1..180}; do
+            if test -f "$RUNNER_TEMP/vpn-ready"; then
+              exit 0
+            fi
+
+            if test -f "$RUNNER_TEMP/vpn-failed"; then
+              cat "$RUNNER_TEMP/vpn-failed"
+              exit 1
+            fi
+
+            sleep 1
+          done
+
+          echo "VPN did not become ready"
+          exit 1
+
+      - name: Verify SSH over VPN
+        id: ssh
+        timeout-minutes: 1
+        run: |
+          ssh -T -i ~/.ssh/cineca \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o NumberOfPasswordPrompts=0 \
+            -o ConnectTimeout=15 \
+            -o ConnectionAttempts=1 \
+            "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}" \
+            true
+
+      - name: Stop VPN
+        cancel: vpn
 
       - name: Emergency VPN cleanup
         if: always()
         shell: bash
+        run: sudo -n gpclient disconnect || true
+
+      - name: Write VPN authentication summary
+        if: ${{ always() }}
+        shell: bash
         run: |
-          if command -v gpclient >/dev/null 2>&1; then
-            sudo -n gpclient disconnect || true
-          fi
+          {
+            echo "## VPN authentication and connectivity"
+            echo
+            echo "- VPN background process: \`${{ steps.vpn.outcome }}\`"
+            echo "- VPN readiness check: \`${{ steps.vpn_wait.outcome }}\`"
+            echo "- SSH connectivity check: \`${{ steps.ssh.outcome }}\`"
+            if test -f "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"; then
+              echo
+              cat "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Upload VPN authentication diagnostics
+        if: ${{ failure() && steps.vpn_wait.outcome == 'failure' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: vpn-auth-diagnostics-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/vpn-auth-diagnostics/
+          if-no-files-found: ignore
+          retention-days: 3
