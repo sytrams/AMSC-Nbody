@@ -33,6 +33,7 @@ build_morton_groups/
 build_radix_groups/
 build_octree_plan/
 build_octree/
+build_octree_physics/
 *.exe
 *.out
 *.app
