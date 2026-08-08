@@ -32,6 +32,7 @@ build_tree/
 build_morton_groups/
 build_radix_groups/
 build_octree_plan/
+build_octree/
 *.exe
 *.out
 *.app

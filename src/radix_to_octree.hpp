@@ -1,7 +1,7 @@
 #pragma once
 
 #include <cstddef>
-#include <cstddef>
+#include <cstdint>
 
 #include "morton_leaf_groups.hpp"
 #include "tree_types.hpp"
