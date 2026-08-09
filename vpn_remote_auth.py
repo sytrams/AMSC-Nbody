@@ -21,7 +21,7 @@ from playwright.sync_api import BrowserContext, Locator, Page, sync_playwright
 
 CALLBACK_PREFIX = "globalprotectcallback:"
 CALLBACK_PATTERN = re.compile(r"globalprotectcallback:[^\s\"'<>]+", re.IGNORECASE)
-HTTP_URL_PATTERN = re.compile(r"https?://[^\s)\]]+", re.IGNORECASE)
+HTTP_URL_PATTERN = re.compile(r"https?://[^\s)]+", re.IGNORECASE)
 UUID_PATTERN = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
@@ -336,12 +336,14 @@ def redact_sensitive_values(text: str, secrets: tuple[str, ...]) -> str:
     sanitized = UUID_PATTERN.sub("[identifier redacted]", sanitized)
 
     def redact_url(match: re.Match[str]) -> str:
-        parsed = urlsplit(match.group(0).rstrip(".,;"))
-        hostname = parsed.hostname or "host"
+        candidate = match.group(0).rstrip(".,;")
         try:
+            parsed = urlsplit(candidate)
+            hostname = parsed.hostname or "host"
             port = f":{parsed.port}" if parsed.port is not None else ""
         except ValueError:
-            port = ""
+            scheme = candidate.partition(":")[0].lower()
+            return f"{scheme}://host/[url redacted]"
         return f"{parsed.scheme}://{hostname}{port}/[url redacted]"
 
     sanitized = HTTP_URL_PATTERN.sub(redact_url, sanitized)
@@ -788,7 +790,6 @@ def wait_for_vpn_ready(
 ) -> None:
     assert gpclient.stdin is not None
 
-    url_pattern = re.compile(r"https?://[^\s)\]]+")
     waiting_for_auth_url = False
     auth_url_deadline: float | None = None
     vpn_deadline = monotonic() + VPN_READY_TIMEOUT_SECONDS
@@ -851,11 +852,12 @@ def wait_for_vpn_ready(
         if not waiting_for_auth_url:
             continue
 
-        match = url_pattern.search(line)
+        match = HTTP_URL_PATTERN.search(line)
         if not match:
             continue
 
-        url = match.group(0).rstrip(".,);]")
+        # Keep a closing bracket because it may terminate an IPv6 host.
+        url = match.group(0).rstrip(".,);")
         auth_round += 1
         if auth_round == 1:
             stage = "portal"
