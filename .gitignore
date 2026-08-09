@@ -26,14 +26,11 @@
 *.a
 *.lib
 
-# Executables
-build/
-build_tree/
-build_morton_groups/
-build_radix_groups/
-build_octree_plan/
-build_octree/
-build_octree_physics/
+# CMake and generated test output
+/build*/
+/cmake-build-*/
+/ci-results/
+/nbody-tests.sif
 *.exe
 *.out
 *.app
