@@ -11,7 +11,7 @@ import signal
 import subprocess
 import sys
 from threading import Event, Thread
-from time import monotonic, time
+from time import monotonic
 from typing import TextIO
 from urllib.parse import urlsplit
 
@@ -21,7 +21,7 @@ from playwright.sync_api import BrowserContext, Locator, Page, sync_playwright
 
 CALLBACK_PREFIX = "globalprotectcallback:"
 CALLBACK_PATTERN = re.compile(r"globalprotectcallback:[^\s\"'<>]+", re.IGNORECASE)
-HTTP_URL_PATTERN = re.compile(r"https?://[^\s)]+", re.IGNORECASE)
+HTTP_URL_PATTERN = re.compile(r"https?://[^\s)\]]+", re.IGNORECASE)
 UUID_PATTERN = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
@@ -31,8 +31,6 @@ AUTH_TIMEOUT_SECONDS = 60
 AUTH_URL_TIMEOUT_SECONDS = 30
 VPN_READY_TIMEOUT_SECONDS = 180
 PROCESS_STOP_TIMEOUT_SECONDS = 15
-VPN_CONNECT_ATTEMPTS = 4
-VPN_PRELOGIN_RETRY_DELAY_SECONDS = 5
 POLL_INTERVAL_MS = 250
 PROCESS_STARTED_AT = monotonic()
 
@@ -79,25 +77,6 @@ ERROR_SELECTOR = (
 
 class ShutdownRequested(Exception):
     """Raised when the workflow asks the background VPN process to stop."""
-
-
-def is_retryable_gpclient_failure(exc: Exception) -> bool:
-    message = str(exc)
-    return any(
-        marker in message
-        for marker in (
-            "gpclient exited before VPN readiness",
-            "gpclient output ended before VPN readiness",
-        )
-    )
-
-
-def retry_delay_seconds(callback_was_used: bool) -> int:
-    if not callback_was_used:
-        return VPN_PRELOGIN_RETRY_DELAY_SECONDS
-
-    interval = pyotp.TOTP(required_secret("POLIMI_TOTP")).interval
-    return interval - (int(time()) % interval) + 1
 
 
 @dataclass
@@ -811,6 +790,7 @@ def wait_for_vpn_ready(
 ) -> None:
     assert gpclient.stdin is not None
 
+    url_pattern = re.compile(r"https?://[^\s)\]]+")
     waiting_for_auth_url = False
     auth_url_deadline: float | None = None
     vpn_deadline = monotonic() + VPN_READY_TIMEOUT_SECONDS
@@ -873,12 +853,11 @@ def wait_for_vpn_ready(
         if not waiting_for_auth_url:
             continue
 
-        match = HTTP_URL_PATTERN.search(line)
+        match = url_pattern.search(line)
         if not match:
             continue
 
-        # Keep a closing bracket because it may terminate an IPv6 host.
-        url = match.group(0).rstrip(".,);")
+        url = match.group(0).rstrip(".,);]")
         auth_round += 1
         if auth_round == 1:
             stage = "portal"
@@ -1026,8 +1005,8 @@ def start_vpn(
 
 
 def main() -> int:
-    diagnostics_directory = required_directory("VPN_DIAGNOSTICS_DIR")
-    diagnostics = VpnDiagnostics(diagnostics_directory)
+    diagnostics = VpnDiagnostics(required_directory("VPN_DIAGNOSTICS_DIR"))
+    prepare_diagnostics(diagnostics)
     ready_file = required_status_path("VPN_READY_FILE")
     failed_file = required_status_path("VPN_FAILED_FILE")
     remove_status_file(ready_file)
@@ -1037,31 +1016,7 @@ def main() -> int:
     install_shutdown_handlers(shutdown_event)
 
     try:
-        for attempt in range(1, VPN_CONNECT_ATTEMPTS + 1):
-            diagnostics = VpnDiagnostics(diagnostics_directory)
-            prepare_diagnostics(diagnostics)
-            try:
-                return start_vpn(ready_file, shutdown_event, diagnostics)
-            except ShutdownRequested:
-                raise
-            except Exception as exc:
-                if (
-                    attempt >= VPN_CONNECT_ATTEMPTS
-                    or not is_retryable_gpclient_failure(exc)
-                ):
-                    raise
-
-                delay = retry_delay_seconds(diagnostics.callback_found)
-                log_event(
-                    "retry",
-                    f"gpclient stopped during setup; retrying connection "
-                    f"after {delay}s with a fresh OTP "
-                    f"(attempt {attempt + 1}/{VPN_CONNECT_ATTEMPTS})",
-                )
-                if shutdown_event.wait(delay):
-                    raise ShutdownRequested
-
-        raise AssertionError("VPN connection attempt loop ended unexpectedly")
+        return start_vpn(ready_file, shutdown_event, diagnostics)
     except ShutdownRequested:
         log_event("lifecycle", "shutdown completed before VPN readiness")
         return 0
