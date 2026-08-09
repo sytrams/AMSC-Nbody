@@ -31,7 +31,8 @@ AUTH_TIMEOUT_SECONDS = 60
 AUTH_URL_TIMEOUT_SECONDS = 30
 VPN_READY_TIMEOUT_SECONDS = 180
 PROCESS_STOP_TIMEOUT_SECONDS = 15
-VPN_CONNECT_ATTEMPTS = 2
+VPN_CONNECT_ATTEMPTS = 4
+VPN_PRELOGIN_RETRY_DELAY_SECONDS = 5
 POLL_INTERVAL_MS = 250
 PROCESS_STARTED_AT = monotonic()
 
@@ -91,7 +92,10 @@ def is_retryable_gpclient_failure(exc: Exception) -> bool:
     )
 
 
-def fresh_otp_delay_seconds() -> int:
+def retry_delay_seconds(callback_was_used: bool) -> int:
+    if not callback_was_used:
+        return VPN_PRELOGIN_RETRY_DELAY_SECONDS
+
     interval = pyotp.TOTP(required_secret("POLIMI_TOTP")).interval
     return interval - (int(time()) % interval) + 1
 
@@ -1047,7 +1051,7 @@ def main() -> int:
                 ):
                     raise
 
-                delay = fresh_otp_delay_seconds()
+                delay = retry_delay_seconds(diagnostics.callback_found)
                 log_event(
                     "retry",
                     f"gpclient stopped during setup; retrying connection "
