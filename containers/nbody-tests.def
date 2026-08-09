@@ -1,0 +1,59 @@
+Bootstrap: docker
+From: nvidia/cuda:12.8.1-devel-ubuntu24.04
+
+%labels
+    org.opencontainers.image.title N-body GoogleTest environment
+    org.opencontainers.image.description CUDA, Clang, CMake, Ninja, and GoogleTest for the AMSC N-body test suite
+    org.opencontainers.image.version 1.0.0
+
+%help
+    Build:
+        apptainer build --fakeroot nbody-tests.sif containers/nbody-tests.def
+
+    Run all GoogleTests from the project root on a GPU node:
+        apptainer run --nv nbody-tests.sif all "$PWD"
+
+    Run only the CPU suite (no GPU passthrough is required):
+        apptainer run nbody-tests.sif cpu "$PWD"
+
+    Modes: cpu, cuda, all, sanitizer
+
+%files
+    containers/run-google-tests.sh /usr/local/bin/run-google-tests
+
+%post
+    export DEBIAN_FRONTEND=noninteractive
+
+    apt-get update
+    apt-get install -y --no-install-recommends \
+        ca-certificates \
+        clang-18 \
+        cmake \
+        git \
+        libgtest-dev \
+        ninja-build
+    rm -rf /var/lib/apt/lists/*
+
+    chmod 0755 /usr/local/bin/run-google-tests
+
+    # CMake 3.28 and Clang 18 support the C++23 module used by particle.cppm.
+    cmake --version
+    clang++-18 --version
+    nvcc --version
+
+%environment
+    export CC=clang-18
+    export CXX=clang++-18
+    export CMAKE_GENERATOR=Ninja
+    export CUDA_HOME=/usr/local/cuda
+    export PATH=/usr/local/cuda/bin:${PATH}
+
+%runscript
+    exec /usr/local/bin/run-google-tests "$@"
+
+%test
+    command -v cmake
+    command -v ninja
+    command -v clang++-18
+    command -v nvcc
+    find /usr/lib -path '*/cmake/GTest/GTestConfig.cmake' -print -quit | grep -q .
