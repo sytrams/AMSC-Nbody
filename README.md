@@ -95,12 +95,13 @@ Configure, compile, and run all GoogleTests with:
 cmake -S . -B build -G Ninja \
   -DBUILD_TESTING=ON \
   -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_CUDA_ARCHITECTURES=80
+  -DCMAKE_CUDA_ARCHITECTURES=89
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
 
-Architecture `80` targets NVIDIA A100. Set `CMAKE_CUDA_ARCHITECTURES` to the
+Architecture `89` targets the student cluster's NVIDIA L4 GPUs. Set
+`CMAKE_CUDA_ARCHITECTURES` to the
 compute capability of the cluster GPU, or to a semicolon-separated CMake list
 when one build must support several architectures.
 
@@ -110,7 +111,7 @@ To add Compute Sanitizer memcheck cases to CTest:
 cmake -S . -B build -G Ninja \
   -DBUILD_TESTING=ON \
   -DNBODY_ENABLE_COMPUTE_SANITIZER_TESTS=ON \
-  -DCMAKE_CUDA_ARCHITECTURES=80
+  -DCMAKE_CUDA_ARCHITECTURES=89
 cmake --build build --parallel
 ctest --test-dir build --output-on-failure
 ```
@@ -118,7 +119,7 @@ ctest --test-dir build --output-on-failure
 ## Singularity/Apptainer test container
 
 `Singularity.def` defines only the test environment: CUDA 12.6.3, GCC, CMake,
-Ninja, and GoogleTest. It does not contain VPN, SSH, Slurm authentication, or
+Ninja, and GoogleTest. It does not contain VPN, SSH, PBS authentication, or
 cluster credentials. The host NVIDIA driver is injected only at execution time
 with `--nv`.
 
@@ -131,22 +132,25 @@ sudo apptainer build nbody-tests.sif Singularity.def
 The equivalent `singularity build` command can be used with SingularityCE.
 Image construction does not need a GPU; CUDA execution does.
 
-For a manual Slurm submission, first ensure `ci-results` exists because Slurm
-opens the output file before starting the script:
+The student cluster uses OpenPBS. Enable its commands, create the results
+directory, and explicitly request the GPU queue, one GPU, and two CPU threads:
 
 ```bash
+. /etc/profile.d/pbs.sh
 mkdir -p ci-results
-sbatch --wait \
-  --partition=GPU_PARTITION \
-  --account=PROJECT_ACCOUNT \
-  --export=ALL,SOURCE_DIR="$PWD",IMAGE_PATH="$PWD/nbody-tests.sif",RESULTS_DIR="$PWD/ci-results",CONTAINER_RUNTIME=singularity,CUDA_ARCHITECTURES=80 \
-  ci/run_gpu_tests.slurm
+qsub \
+  -q gpu \
+  -l select=1:ncpus=2:ngpus=1 \
+  -l walltime=00:30:00 \
+  -v SOURCE_DIR="$PWD",IMAGE_PATH="$PWD/nbody-tests.sif",RESULTS_DIR="$PWD/ci-results",CONTAINER_RUNTIME=apptainer,CUDA_ARCHITECTURES=89,BUILD_JOBS=2 \
+  ci/run_gpu_tests.pbs
 ```
 
-The batch script requests one NVIDIA GPU, mounts the source read-only at
+Monitor the returned job ID with `qstat -f JOB_ID`. The batch script mounts the
+source read-only at
 `/workspace`, builds in node-local temporary storage, runs every GoogleTest via
-CTest, and writes `ctest-results.xml`, configure/build/test logs, and the Slurm
-output under `ci-results`.
+CTest, and writes `ctest-results.xml`, configure/build/test logs, the PBS output,
+and an exit-code marker under `ci-results`.
 
 ## Automated cluster deployment
 
@@ -156,7 +160,8 @@ output under `ci-results`.
 2. establish the GlobalProtect VPN and SSH connection;
 3. transfer the tracked source archive and SIF image to a commit-specific
    cluster directory;
-4. submit `ci/run_gpu_tests.slurm` and wait for its exit status;
+4. load the PBS commands, submit `ci/run_gpu_tests.pbs` to the `gpu` queue with
+   `select=1:ncpus=2:ngpus=1`, and wait for its exit status;
 5. download the JUnit report and logs as a GitHub Actions artifact;
 6. disconnect the VPN in an `always()` cleanup step.
 
@@ -171,21 +176,18 @@ Configure these repository variables as required by the target cluster:
 
 | Variable | Required | Default | Purpose |
 | --- | --- | --- | --- |
-| `SLURM_PARTITION` | Yes on most clusters | empty | GPU-enabled Slurm partition, for example Leonardo `boost_usr_prod` |
-| `SLURM_ACCOUNT` | Cluster-dependent | empty | Project allocation/account passed to `sbatch` |
-| `SLURM_QOS` | Cluster-dependent | empty | Optional Slurm QOS |
-| `CUDA_ARCHITECTURES` | No | `80` | CMake CUDA architecture; use `90` for H100 |
+| `PBS_QUEUE` | No | `gpu` | OpenPBS queue containing the multi-GPU nodes |
+| `PBS_NCPUS` | No | `2` | CPU threads requested alongside one GPU |
+| `PBS_WALLTIME` | No | `00:30:00` | Maximum PBS job duration in `HH:MM:SS` format |
+| `CUDA_ARCHITECTURES` | No | `89` | CMake CUDA architecture for the NVIDIA L4 |
 | `CLUSTER_PROJECT_ROOT` | No | `AMSC-Nbody-ci` | Remote directory containing commit-specific releases |
-| `CLUSTER_CONTAINER_RUNTIME` | No | `singularity` | `singularity` or `apptainer` executable on compute nodes |
+| `CLUSTER_CONTAINER_RUNTIME` | No | `apptainer` | `apptainer` or `singularity` executable on compute nodes |
 | `CLUSTER_CONTAINER_MODULE` | No | empty | Environment module to load when the runtime is not already available |
 | `ENABLE_COMPUTE_SANITIZER` | No | `OFF` | Set to `ON` to register and execute memcheck tests |
 
-For CINECA Leonardo, the defaults `CUDA_ARCHITECTURES=80` and
-`CLUSTER_CONTAINER_RUNTIME=singularity` match its A100 nodes and Singularity
-runtime; set the project-specific Slurm account and a GPU partition. Refer to
-the current [CINECA container documentation](https://docs.hpc.cineca.it/services/singularity.html)
-and [Leonardo partition documentation](https://docs.hpc.cineca.it/hpc/leonardo.html)
-when choosing site values.
+The defaults match the student cluster guide: OpenPBS `gpu` queue, one shared
+NVIDIA L4 GPU, two requested CPU threads, compute capability 8.9, and the
+locally installed `apptainer` runtime.
 
 ## Generate Galaxy Data
 The script [data/generate_galaxy.py](data/generate_galaxy.py) creates synthetic binary datasets for the galaxy viewer and the large-particle loader.

@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
-#SBATCH --job-name=amsc-nbody-tests
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
-#SBATCH --gres=gpu:1
-#SBATCH --time=00:30:00
-#SBATCH --output=ci-results/slurm-%j.out
+#PBS -N amsc-nbody-test
+#PBS -q gpu
+#PBS -l select=1:ncpus=2:ngpus=1
+#PBS -l walltime=00:30:00
+#PBS -j oe
 
 set -euo pipefail
 
-SOURCE_DIR="${SOURCE_DIR:-$PWD}"
+SOURCE_DIR="${SOURCE_DIR:-${PBS_O_WORKDIR:-$PWD}}"
 IMAGE_PATH="${IMAGE_PATH:-${SOURCE_DIR}/nbody-tests.sif}"
-RESULTS_DIR="${RESULTS_DIR:-${SOURCE_DIR}/ci-results/${SLURM_JOB_ID:-manual}}"
-CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES:-80}"
+RESULTS_DIR="${RESULTS_DIR:-${SOURCE_DIR}/ci-results/${PBS_JOBID:-manual}}"
+CUDA_ARCHITECTURES="${CUDA_ARCHITECTURES:-89}"
 NBODY_ENABLE_COMPUTE_SANITIZER_TESTS="${NBODY_ENABLE_COMPUTE_SANITIZER_TESTS:-OFF}"
 CONTAINER_RUNTIME="${CONTAINER_RUNTIME:-apptainer}"
+BUILD_JOBS="${BUILD_JOBS:-2}"
 
 if [[ -n "${CONTAINER_MODULE:-}" ]]; then
     if ! type module >/dev/null 2>&1 && [[ -r /etc/profile ]]; then
@@ -44,8 +43,15 @@ fi
 
 mkdir -p "${RESULTS_DIR}"
 
-SCRATCH_ROOT="${SLURM_TMPDIR:-${TMPDIR:-/tmp}}"
-BUILD_DIR="${SCRATCH_ROOT}/amsc-nbody-${SLURM_JOB_ID:-manual}"
+record_exit_status() {
+    local status=$?
+    set +e
+    printf '%s\n' "${status}" > "${RESULTS_DIR}/pbs-exit-code"
+}
+trap record_exit_status EXIT
+
+SCRATCH_ROOT="${TMPDIR:-/scratch_local}"
+BUILD_DIR="${SCRATCH_ROOT}/amsc-nbody-${PBS_JOBID:-manual}"
 mkdir -p "${BUILD_DIR}"
 
 container_exec=(
@@ -53,12 +59,21 @@ container_exec=(
     exec
     --nv
     --cleanenv
+)
+
+if [[ -n "${CUDA_VISIBLE_DEVICES:-}" ]]; then
+    container_exec+=(--env "CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES}")
+fi
+
+container_exec+=(
     --bind "${SOURCE_DIR}:/workspace:ro"
     --bind "${BUILD_DIR}:/build"
     --bind "${RESULTS_DIR}:/results"
     "${IMAGE_PATH}"
 )
 
+printf 'PBS job: %s\n' "${PBS_JOBID:-manual}"
+printf 'GPU node: %s\n' "$(hostname)"
 "${container_exec[@]}" nvidia-smi
 
 "${container_exec[@]}" cmake \
@@ -73,7 +88,7 @@ container_exec=(
 
 "${container_exec[@]}" cmake \
     --build /build \
-    --parallel "${SLURM_CPUS_PER_TASK:-4}" \
+    --parallel "${BUILD_JOBS}" \
     2>&1 | tee "${RESULTS_DIR}/build.log"
 
 "${container_exec[@]}" ctest \

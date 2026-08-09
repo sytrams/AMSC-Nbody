@@ -19,9 +19,9 @@ set(CMAKE_CUDA_EXTENSIONS OFF)
 if(NOT CMAKE_CUDA_ARCHITECTURES)
     set(
         CMAKE_CUDA_ARCHITECTURES
-        80
+        89
         CACHE STRING
-        "CUDA architectures to compile for (80 targets NVIDIA A100)"
+        "CUDA architectures to compile for (89 targets NVIDIA L4)"
         FORCE)
 endif()
 

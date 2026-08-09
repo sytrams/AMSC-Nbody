@@ -116,7 +116,7 @@ jobs:
           test -s "$archive_path"
           echo "archive=$archive_path" >> "$GITHUB_OUTPUT"
 
-      - name: Configure CINECA SSH credential
+      - name: Configure cluster SSH credential
         shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -124,11 +124,11 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/cineca
-          printf '%s\n' "$SSH_CERTIFICATE" > ~/.ssh/cineca-cert.pub
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/cluster
+          printf '%s\n' "$SSH_CERTIFICATE" > ~/.ssh/cluster-cert.pub
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/cineca ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/cineca-cert.pub
+          chmod 600 ~/.ssh/cluster ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/cluster-cert.pub
 
       - name: Install Python and browser dependencies
         shell: bash
@@ -201,7 +201,7 @@ jobs:
         id: ssh
         timeout-minutes: 1
         run: |
-          ssh -T -i ~/.ssh/cineca \
+          ssh -T -i ~/.ssh/cluster \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
@@ -231,7 +231,7 @@ jobs:
           release_dir="${CLUSTER_PROJECT_ROOT%/}/releases/${GITHUB_SHA}"
           remote_archive="$release_dir/source.tar.gz"
           ssh_options=(
-            -i ~/.ssh/cineca
+            -i ~/.ssh/cluster
             -o BatchMode=yes
             -o IdentitiesOnly=yes
             -o StrictHostKeyChecking=yes
@@ -259,13 +259,14 @@ jobs:
         shell: bash
         env:
           RELEASE_DIR: ${{ steps.deploy.outputs.release }}
-          CONTAINER_RUNTIME: ${{ vars.CLUSTER_CONTAINER_RUNTIME || 'singularity' }}
+          CONTAINER_RUNTIME: ${{ vars.CLUSTER_CONTAINER_RUNTIME || 'apptainer' }}
           CONTAINER_MODULE: ${{ vars.CLUSTER_CONTAINER_MODULE }}
-          CUDA_ARCHITECTURES: ${{ vars.CUDA_ARCHITECTURES || '80' }}
-          SLURM_PARTITION: ${{ vars.SLURM_PARTITION }}
-          SLURM_ACCOUNT: ${{ vars.SLURM_ACCOUNT }}
-          SLURM_QOS: ${{ vars.SLURM_QOS }}
+          CUDA_ARCHITECTURES: ${{ vars.CUDA_ARCHITECTURES || '89' }}
+          PBS_QUEUE: ${{ vars.PBS_QUEUE || 'gpu' }}
+          PBS_NCPUS: ${{ vars.PBS_NCPUS || '2' }}
+          PBS_WALLTIME: ${{ vars.PBS_WALLTIME || '00:30:00' }}
           ENABLE_COMPUTE_SANITIZER: ${{ vars.ENABLE_COMPUTE_SANITIZER || 'OFF' }}
+          RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euxo pipefail
 
@@ -274,10 +275,9 @@ jobs:
             "$CONTAINER_RUNTIME" \
             "$CONTAINER_MODULE" \
             "$CUDA_ARCHITECTURES" \
-            "$SLURM_PARTITION" \
-            "$SLURM_ACCOUNT" \
-            "$SLURM_QOS" \
-            "$ENABLE_COMPUTE_SANITIZER"; do
+            "$PBS_QUEUE" \
+            "$ENABLE_COMPUTE_SANITIZER" \
+            "$RUN_KEY"; do
             if [[ ! "$value" =~ ^[A-Za-z0-9_./\;+:=-]*$ ]]; then
               echo "A cluster configuration value contains unsupported characters" >&2
               exit 1
@@ -289,9 +289,19 @@ jobs:
             exit 1
           fi
 
+          if [[ ! "$PBS_NCPUS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "PBS_NCPUS must be a positive integer" >&2
+            exit 1
+          fi
+
+          if [[ ! "$PBS_WALLTIME" =~ ^[0-9]{2,3}:[0-5][0-9]:[0-5][0-9]$ ]]; then
+            echo "PBS_WALLTIME must use HH:MM:SS format" >&2
+            exit 1
+          fi
+
           target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
           ssh_options=(
-            -i ~/.ssh/cineca
+            -i ~/.ssh/cluster
             -o BatchMode=yes
             -o IdentitiesOnly=yes
             -o StrictHostKeyChecking=yes
@@ -304,10 +314,11 @@ jobs:
             "$CONTAINER_RUNTIME" \
             "$CONTAINER_MODULE" \
             "$CUDA_ARCHITECTURES" \
-            "$SLURM_PARTITION" \
-            "$SLURM_ACCOUNT" \
-            "$SLURM_QOS" \
-            "$ENABLE_COMPUTE_SANITIZER"
+            "$PBS_QUEUE" \
+            "$PBS_NCPUS" \
+            "$PBS_WALLTIME" \
+            "$ENABLE_COMPUTE_SANITIZER" \
+            "$RUN_KEY"
 
           ssh "${ssh_options[@]}" "$target" \
             "bash -s -- $remote_arguments" <<'REMOTE_SCRIPT'
@@ -317,36 +328,98 @@ jobs:
           container_runtime="$2"
           container_module="$3"
           cuda_architectures="$4"
-          slurm_partition="$5"
-          slurm_account="$6"
-          slurm_qos="$7"
+          pbs_queue="$5"
+          pbs_ncpus="$6"
+          pbs_walltime="$7"
           enable_compute_sanitizer="$8"
+          run_key="$9"
 
           cd "$release_dir"
           release_dir="$PWD"
-          mkdir -p ci-results
+          results_dir="$release_dir/ci-results/$run_key"
+          mkdir -p "$results_dir"
 
-          sbatch_arguments=(
-            --wait
-            --parsable
-            --chdir="$release_dir"
-          )
-          [[ -z "$slurm_partition" ]] || sbatch_arguments+=(--partition="$slurm_partition")
-          [[ -z "$slurm_account" ]] || sbatch_arguments+=(--account="$slurm_account")
-          [[ -z "$slurm_qos" ]] || sbatch_arguments+=(--qos="$slurm_qos")
+          . /etc/profile.d/pbs.sh
+          command -v qsub
+          command -v qstat
+          command -v qdel
+          qstat -Qf "$pbs_queue" >/dev/null
 
-          exported_environment="ALL,SOURCE_DIR=$release_dir"
-          exported_environment+=",IMAGE_PATH=$release_dir/nbody-tests.sif"
-          exported_environment+=",RESULTS_DIR=$release_dir/ci-results"
-          exported_environment+=",CONTAINER_RUNTIME=$container_runtime"
-          exported_environment+=",CONTAINER_MODULE=$container_module"
-          exported_environment+=",CUDA_ARCHITECTURES=$cuda_architectures"
-          exported_environment+=",NBODY_ENABLE_COMPUTE_SANITIZER_TESTS=$enable_compute_sanitizer"
+          requested_resources="select=1:ncpus=${pbs_ncpus}:ngpus=1"
+          job_environment="SOURCE_DIR=$release_dir"
+          job_environment+=",IMAGE_PATH=$release_dir/nbody-tests.sif"
+          job_environment+=",RESULTS_DIR=$results_dir"
+          job_environment+=",CONTAINER_RUNTIME=$container_runtime"
+          job_environment+=",CONTAINER_MODULE=$container_module"
+          job_environment+=",CUDA_ARCHITECTURES=$cuda_architectures"
+          job_environment+=",BUILD_JOBS=$pbs_ncpus"
+          job_environment+=",NBODY_ENABLE_COMPUTE_SANITIZER_TESTS=$enable_compute_sanitizer"
 
-          sbatch \
-            "${sbatch_arguments[@]}" \
-            --export="$exported_environment" \
-            ci/run_gpu_tests.slurm
+          job_id=""
+          cleanup_remote_job() {
+            if [[ -n "$job_id" ]] && qstat "$job_id" >/dev/null 2>&1; then
+              qdel "$job_id" || true
+            fi
+          }
+          trap cleanup_remote_job EXIT INT TERM
+
+          job_id="$(
+            qsub \
+              -q "$pbs_queue" \
+              -l "$requested_resources" \
+              -l "walltime=$pbs_walltime" \
+              -N amsc-nbody-test \
+              -j oe \
+              -o "$results_dir/pbs-job.out" \
+              -v "$job_environment" \
+              ci/run_gpu_tests.pbs
+          )"
+          printf 'Submitted OpenPBS GPU job %s with %s\n' \
+            "$job_id" \
+            "$requested_resources"
+
+          job_finished=false
+          for attempt in {1..360}; do
+            job_state="$(
+              qstat -f "$job_id" 2>/dev/null \
+                | awk '$1 == "job_state" { print $3; exit }' \
+                || true
+            )"
+            case "$job_state" in
+              F|X|"")
+                job_finished=true
+                break
+                ;;
+              *)
+                sleep 10
+                ;;
+            esac
+          done
+
+          if [[ "$job_finished" != true ]]; then
+            echo "Timed out waiting for OpenPBS GPU job $job_id" >&2
+            exit 1
+          fi
+
+          for attempt in {1..12}; do
+            [[ -s "$results_dir/pbs-exit-code" ]] && break
+            sleep 5
+          done
+
+          if [[ ! -s "$results_dir/pbs-exit-code" ]]; then
+            echo "OpenPBS job $job_id completed without an exit-code file" >&2
+            exit 1
+          fi
+
+          job_exit_code="$(<"$results_dir/pbs-exit-code")"
+          if [[ ! "$job_exit_code" =~ ^[0-9]+$ ]]; then
+            echo "Invalid OpenPBS job exit code: $job_exit_code" >&2
+            exit 1
+          fi
+
+          job_id=""
+          trap - EXIT INT TERM
+          exit "$job_exit_code"
           REMOTE_SCRIPT
 
       - name: Download cluster test results
@@ -365,7 +438,7 @@ jobs:
 
           scp \
             -r \
-            -i ~/.ssh/cineca \
+            -i ~/.ssh/cluster \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
