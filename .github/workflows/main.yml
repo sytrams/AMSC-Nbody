@@ -1,4 +1,4 @@
-name: VPN SSH operation
+name: NVIDIA cluster tests
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
       - codex/automation-test
 
 jobs:
-  connect:
+  cluster-tests:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 120
 
     steps:
       - name: Check out repository
@@ -67,6 +67,55 @@ jobs:
           command -v gpauth
           gpclient --version
 
+      - name: Install Apptainer builder
+        timeout-minutes: 10
+        shell: bash
+        run: |
+          set -euxo pipefail
+          export DEBIAN_FRONTEND=noninteractive
+
+          sudo add-apt-repository --yes ppa:apptainer/ppa
+          sudo apt-get update
+          sudo apt-get install --yes apptainer
+
+          apptainer version
+
+      - name: Build NVIDIA test container
+        id: container
+        timeout-minutes: 30
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          image_path="$RUNNER_TEMP/nbody-tests.sif"
+          cache_path="$RUNNER_TEMP/apptainer-cache"
+          temporary_path="$RUNNER_TEMP/apptainer-tmp"
+          mkdir -p "$cache_path" "$temporary_path"
+
+          sudo env \
+            APPTAINER_CACHEDIR="$cache_path" \
+            APPTAINER_TMPDIR="$temporary_path" \
+            apptainer build --force "$image_path" Singularity.def
+          sudo chown "$(id -u):$(id -g)" "$image_path"
+
+          test -s "$image_path"
+          echo "image=$image_path" >> "$GITHUB_OUTPUT"
+
+      - name: Package tracked source
+        id: bundle
+        shell: bash
+        run: |
+          set -euxo pipefail
+
+          archive_path="$RUNNER_TEMP/amsc-nbody-${GITHUB_SHA}.tar.gz"
+          git archive \
+            --format=tar.gz \
+            --output="$archive_path" \
+            "$GITHUB_SHA"
+
+          test -s "$archive_path"
+          echo "archive=$archive_path" >> "$GITHUB_OUTPUT"
+
       - name: Configure CINECA SSH credential
         shell: bash
         env:
@@ -92,7 +141,6 @@ jobs:
 
       - name: Authenticate and keep VPN connected
         id: vpn
-        background: true
         shell: bash
         env:
           POLIMI_USERNAME: ${{secrets.POLIMI_USER}}
@@ -102,9 +150,24 @@ jobs:
           VPN_READY_FILE: ${{ runner.temp }}/vpn-ready
           VPN_FAILED_FILE: ${{ runner.temp }}/vpn-failed
           VPN_DIAGNOSTICS_DIR: ${{ runner.temp }}/vpn-auth-diagnostics
+          VPN_PID_FILE: ${{ runner.temp }}/vpn-auth.pid
+          VPN_LOG_FILE: ${{ runner.temp }}/vpn-auth-diagnostics/vpn.log
           PYTHONUNBUFFERED: "1"
         run: |
-          exec python3 vpn_remote_auth.py
+          set -euo pipefail
+
+          mkdir -p "$VPN_DIAGNOSTICS_DIR"
+          nohup python3 vpn_remote_auth.py \
+            > "$VPN_LOG_FILE" \
+            2>&1 &
+          vpn_pid=$!
+          echo "$vpn_pid" > "$VPN_PID_FILE"
+
+          sleep 1
+          if ! kill -0 "$vpn_pid" 2>/dev/null; then
+            cat "$VPN_LOG_FILE"
+            exit 1
+          fi
 
       - name: Wait for VPN readiness
         id: vpn_wait
@@ -118,6 +181,14 @@ jobs:
             if test -f "$RUNNER_TEMP/vpn-failed"; then
               cat "$RUNNER_TEMP/vpn-failed"
               exit 1
+            fi
+
+            if test -f "$RUNNER_TEMP/vpn-auth.pid"; then
+              vpn_pid=$(<"$RUNNER_TEMP/vpn-auth.pid")
+              if ! kill -0 "$vpn_pid" 2>/dev/null; then
+                cat "$RUNNER_TEMP/vpn-auth-diagnostics/vpn.log"
+                exit 1
+              fi
             fi
 
             sleep 1
@@ -140,13 +211,189 @@ jobs:
             "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}" \
             true
 
-      - name: Stop VPN
-        cancel: vpn
+      - name: Deploy source and test container
+        id: deploy
+        timeout-minutes: 20
+        shell: bash
+        env:
+          ARCHIVE_PATH: ${{ steps.bundle.outputs.archive }}
+          IMAGE_PATH: ${{ steps.container.outputs.image }}
+          CLUSTER_PROJECT_ROOT: ${{ vars.CLUSTER_PROJECT_ROOT || 'AMSC-Nbody-ci' }}
+        run: |
+          set -euxo pipefail
 
-      - name: Emergency VPN cleanup
+          if [[ ! "$CLUSTER_PROJECT_ROOT" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+            echo "CLUSTER_PROJECT_ROOT contains unsupported characters" >&2
+            exit 1
+          fi
+
+          target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
+          release_dir="${CLUSTER_PROJECT_ROOT%/}/releases/${GITHUB_SHA}"
+          remote_archive="$release_dir/source.tar.gz"
+          ssh_options=(
+            -i ~/.ssh/cineca
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o NumberOfPasswordPrompts=0
+            -o ConnectTimeout=30
+            -o ConnectionAttempts=2
+          )
+
+          ssh "${ssh_options[@]}" "$target" \
+            "mkdir -p '$release_dir/ci-results'"
+          scp "${ssh_options[@]}" \
+            "$ARCHIVE_PATH" \
+            "$target:$remote_archive"
+          scp "${ssh_options[@]}" \
+            "$IMAGE_PATH" \
+            "$target:$release_dir/nbody-tests.sif"
+          ssh "${ssh_options[@]}" "$target" \
+            "tar -xzf '$remote_archive' -C '$release_dir'"
+
+          echo "release=$release_dir" >> "$GITHUB_OUTPUT"
+
+      - name: Submit and wait for GPU tests
+        id: cluster_test
+        timeout-minutes: 60
+        shell: bash
+        env:
+          RELEASE_DIR: ${{ steps.deploy.outputs.release }}
+          CONTAINER_RUNTIME: ${{ vars.CLUSTER_CONTAINER_RUNTIME || 'singularity' }}
+          CONTAINER_MODULE: ${{ vars.CLUSTER_CONTAINER_MODULE }}
+          CUDA_ARCHITECTURES: ${{ vars.CUDA_ARCHITECTURES || '80' }}
+          SLURM_PARTITION: ${{ vars.SLURM_PARTITION }}
+          SLURM_ACCOUNT: ${{ vars.SLURM_ACCOUNT }}
+          SLURM_QOS: ${{ vars.SLURM_QOS }}
+          ENABLE_COMPUTE_SANITIZER: ${{ vars.ENABLE_COMPUTE_SANITIZER || 'OFF' }}
+        run: |
+          set -euxo pipefail
+
+          for value in \
+            "$RELEASE_DIR" \
+            "$CONTAINER_RUNTIME" \
+            "$CONTAINER_MODULE" \
+            "$CUDA_ARCHITECTURES" \
+            "$SLURM_PARTITION" \
+            "$SLURM_ACCOUNT" \
+            "$SLURM_QOS" \
+            "$ENABLE_COMPUTE_SANITIZER"; do
+            if [[ ! "$value" =~ ^[A-Za-z0-9_./\;+:=-]*$ ]]; then
+              echo "A cluster configuration value contains unsupported characters" >&2
+              exit 1
+            fi
+          done
+
+          if [[ "$CONTAINER_RUNTIME" != "singularity" && "$CONTAINER_RUNTIME" != "apptainer" ]]; then
+            echo "CLUSTER_CONTAINER_RUNTIME must be singularity or apptainer" >&2
+            exit 1
+          fi
+
+          target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
+          ssh_options=(
+            -i ~/.ssh/cineca
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o NumberOfPasswordPrompts=0
+            -o ConnectTimeout=30
+            -o ConnectionAttempts=2
+          )
+          printf -v remote_arguments '%q ' \
+            "$RELEASE_DIR" \
+            "$CONTAINER_RUNTIME" \
+            "$CONTAINER_MODULE" \
+            "$CUDA_ARCHITECTURES" \
+            "$SLURM_PARTITION" \
+            "$SLURM_ACCOUNT" \
+            "$SLURM_QOS" \
+            "$ENABLE_COMPUTE_SANITIZER"
+
+          ssh "${ssh_options[@]}" "$target" \
+            "bash -s -- $remote_arguments" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          release_dir="$1"
+          container_runtime="$2"
+          container_module="$3"
+          cuda_architectures="$4"
+          slurm_partition="$5"
+          slurm_account="$6"
+          slurm_qos="$7"
+          enable_compute_sanitizer="$8"
+
+          cd "$release_dir"
+          release_dir="$PWD"
+          mkdir -p ci-results
+
+          sbatch_arguments=(
+            --wait
+            --parsable
+            --chdir="$release_dir"
+          )
+          [[ -z "$slurm_partition" ]] || sbatch_arguments+=(--partition="$slurm_partition")
+          [[ -z "$slurm_account" ]] || sbatch_arguments+=(--account="$slurm_account")
+          [[ -z "$slurm_qos" ]] || sbatch_arguments+=(--qos="$slurm_qos")
+
+          exported_environment="ALL,SOURCE_DIR=$release_dir"
+          exported_environment+=",IMAGE_PATH=$release_dir/nbody-tests.sif"
+          exported_environment+=",RESULTS_DIR=$release_dir/ci-results"
+          exported_environment+=",CONTAINER_RUNTIME=$container_runtime"
+          exported_environment+=",CONTAINER_MODULE=$container_module"
+          exported_environment+=",CUDA_ARCHITECTURES=$cuda_architectures"
+          exported_environment+=",NBODY_ENABLE_COMPUTE_SANITIZER_TESTS=$enable_compute_sanitizer"
+
+          sbatch \
+            "${sbatch_arguments[@]}" \
+            --export="$exported_environment" \
+            ci/run_gpu_tests.slurm
+          REMOTE_SCRIPT
+
+      - name: Download cluster test results
+        id: collect
+        if: ${{ always() && steps.deploy.outcome == 'success' }}
+        timeout-minutes: 10
+        shell: bash
+        env:
+          RELEASE_DIR: ${{ steps.deploy.outputs.release }}
+        run: |
+          set -euxo pipefail
+
+          target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
+          results_path="$RUNNER_TEMP/cluster-test-results"
+          mkdir -p "$results_path"
+
+          scp \
+            -r \
+            -i ~/.ssh/cineca \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o NumberOfPasswordPrompts=0 \
+            -o ConnectTimeout=30 \
+            -o ConnectionAttempts=2 \
+            "$target:$RELEASE_DIR/ci-results/." \
+            "$results_path/"
+
+      - name: Stop VPN
         if: always()
         shell: bash
-        run: sudo -n gpclient disconnect || true
+        run: |
+          set +e
+
+          if test -f "$RUNNER_TEMP/vpn-auth.pid"; then
+            vpn_pid=$(<"$RUNNER_TEMP/vpn-auth.pid")
+            if kill -0 "$vpn_pid" 2>/dev/null; then
+              kill -TERM "$vpn_pid"
+              for attempt in {1..30}; do
+                kill -0 "$vpn_pid" 2>/dev/null || break
+                sleep 1
+              done
+              kill -KILL "$vpn_pid" 2>/dev/null || true
+            fi
+          fi
+
+          sudo -n gpclient disconnect || true
 
       - name: Write VPN authentication summary
         if: ${{ always() }}
@@ -158,6 +405,9 @@ jobs:
             echo "- VPN background process: \`${{ steps.vpn.outcome }}\`"
             echo "- VPN readiness check: \`${{ steps.vpn_wait.outcome }}\`"
             echo "- SSH connectivity check: \`${{ steps.ssh.outcome }}\`"
+            echo "- Cluster deployment: \`${{ steps.deploy.outcome }}\`"
+            echo "- GPU test job: \`${{ steps.cluster_test.outcome }}\`"
+            echo "- Result collection: \`${{ steps.collect.outcome }}\`"
             if test -f "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"; then
               echo
               cat "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"
@@ -172,3 +422,12 @@ jobs:
           path: ${{ runner.temp }}/vpn-auth-diagnostics/
           if-no-files-found: ignore
           retention-days: 3
+
+      - name: Upload cluster test results
+        if: ${{ always() && steps.collect.outcome == 'success' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-test-results-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cluster-test-results/
+          if-no-files-found: warn
+          retention-days: 14
