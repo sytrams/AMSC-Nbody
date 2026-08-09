@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
@@ -661,7 +662,7 @@ void testGeneratedCase()
 
 } // namespace
 
-int main()
+int runRadixTreeUniqueKeysTestSuite()
 {
     try
     {
@@ -732,4 +733,9 @@ int main()
 
         return 1;
     }
+}
+
+TEST(RadixTreeUniqueKeysCudaTest, CompleteSuite)
+{
+    EXPECT_EQ(runRadixTreeUniqueKeysTestSuite(), 0);
 }

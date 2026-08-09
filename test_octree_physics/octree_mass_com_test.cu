@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -1071,7 +1072,7 @@ void testRandom()
 
 } // namespace
 
-int main()
+int runOctreeMassCenterOfMassTestSuite()
 {
     try
     {
@@ -1141,4 +1142,9 @@ int main()
 
         return 1;
     }
+}
+
+TEST(OctreeMassCenterOfMassCudaTest, CompleteSuite)
+{
+    EXPECT_EQ(runOctreeMassCenterOfMassTestSuite(), 0);
 }

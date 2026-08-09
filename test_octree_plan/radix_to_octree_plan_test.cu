@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -371,7 +372,7 @@ void testInvalidThirtyBitLayout()
 
 } // namespace
 
-int main()
+int runRadixToOctreePlanTestSuite()
 {
     try
     {
@@ -476,4 +477,9 @@ int main()
 
         return 1;
     }
+}
+
+TEST(RadixToOctreePlanCudaTest, CompleteSuite)
+{
+    EXPECT_EQ(runRadixToOctreePlanTestSuite(), 0);
 }

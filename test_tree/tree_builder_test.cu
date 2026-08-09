@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #include <algorithm>
 #include <cmath>
@@ -653,7 +654,7 @@ void testRandomCases()
 
 } // namespace
 
-int main()
+int runTreeBuilderTestSuite()
 {
     try
     {
@@ -676,4 +677,9 @@ int main()
         std::cerr << "\n[FAIL] " << error.what() << '\n';
         return 1;
     }
+}
+
+TEST(TreeBuilderCudaTest, CompleteSuite)
+{
+    EXPECT_EQ(runTreeBuilderTestSuite(), 0);
 }

@@ -1,10 +1,13 @@
 #include <gtest/gtest.h>
-#include <fstream>
-#include <vector>
-#include <filesystem>
-#include <stdexcept>
 
-import particle;
+#include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+#include "particle.hpp"
 
 class MilkyWayTest : public ::testing::Test {
 protected:

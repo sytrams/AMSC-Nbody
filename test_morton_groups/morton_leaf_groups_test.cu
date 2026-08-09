@@ -1,4 +1,5 @@
 #include <cuda_runtime.h>
+#include <gtest/gtest.h>
 
 #include <cstdint>
 #include <iostream>
@@ -332,7 +333,7 @@ namespace
     }
 } // namespace
 
-int main()
+int runMortonLeafGroupsTestSuite()
 {
     try
     {
@@ -397,4 +398,9 @@ int main()
 
         return 1;
     }
+}
+
+TEST(MortonLeafGroupsCudaTest, CompleteSuite)
+{
+    EXPECT_EQ(runMortonLeafGroupsTestSuite(), 0);
 }
