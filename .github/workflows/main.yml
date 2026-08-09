@@ -364,7 +364,7 @@ jobs:
 
           echo "release=$release_dir" >> "$GITHUB_OUTPUT"
 
-      - name: Submit and wait for Slurm GoogleTests
+      - name: Submit and wait for OpenPBS GPU GoogleTests
         id: cluster_test
         timeout-minutes: 60
         shell: bash
@@ -372,13 +372,10 @@ jobs:
           RELEASE_DIR: ${{ steps.deploy.outputs.release }}
           CONTAINER_RUNTIME: ${{ vars.CLUSTER_CONTAINER_RUNTIME || 'apptainer' }}
           CONTAINER_MODULE: ${{ vars.CLUSTER_CONTAINER_MODULE }}
-          CUDA_ARCHITECTURES: ${{ vars.CUDA_ARCHITECTURES || '80' }}
-          SLURM_PARTITION: ${{ vars.SLURM_PARTITION }}
-          SLURM_ACCOUNT: ${{ vars.SLURM_ACCOUNT }}
-          SLURM_QOS: ${{ vars.SLURM_QOS }}
-          SLURM_CPUS: ${{ vars.SLURM_CPUS_PER_TASK || '8' }}
-          SLURM_MEMORY: ${{ vars.SLURM_MEMORY || '16G' }}
-          SLURM_WALLTIME: ${{ vars.SLURM_WALLTIME || '00:30:00' }}
+          CUDA_ARCHITECTURES: ${{ vars.CUDA_ARCHITECTURES || '89' }}
+          PBS_QUEUE: ${{ vars.PBS_QUEUE || 'gpu' }}
+          PBS_NCPUS: ${{ vars.PBS_NCPUS || '2' }}
+          PBS_WALLTIME: ${{ vars.PBS_WALLTIME || '00:30:00' }}
           RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euxo pipefail
@@ -388,11 +385,8 @@ jobs:
             "$CONTAINER_RUNTIME" \
             "$CONTAINER_MODULE" \
             "$CUDA_ARCHITECTURES" \
-            "$SLURM_PARTITION" \
-            "$SLURM_ACCOUNT" \
-            "$SLURM_QOS" \
-            "$SLURM_MEMORY" \
-            "$SLURM_WALLTIME" \
+            "$PBS_QUEUE" \
+            "$PBS_WALLTIME" \
             "$RUN_KEY"; do
             if [[ ! "$value" =~ ^[A-Za-z0-9_./\;+:=-]*$ ]]; then
               echo "A cluster configuration value contains unsupported characters" >&2
@@ -405,13 +399,13 @@ jobs:
             exit 1
           fi
 
-          if [[ ! "$SLURM_CPUS" =~ ^[1-9][0-9]*$ ]]; then
-            echo "SLURM_CPUS_PER_TASK must be a positive integer" >&2
+          if [[ ! "$PBS_NCPUS" =~ ^[1-9][0-9]*$ ]]; then
+            echo "PBS_NCPUS must be a positive integer" >&2
             exit 1
           fi
 
-          if [[ ! "$SLURM_WALLTIME" =~ ^[0-9]{2,3}:[0-5][0-9]:[0-5][0-9]$ ]]; then
-            echo "SLURM_WALLTIME must use HH:MM:SS format" >&2
+          if [[ ! "$PBS_WALLTIME" =~ ^[0-9]{2,3}:[0-5][0-9]:[0-5][0-9]$ ]]; then
+            echo "PBS_WALLTIME must use HH:MM:SS format" >&2
             exit 1
           fi
 
@@ -430,12 +424,9 @@ jobs:
             "$CONTAINER_RUNTIME" \
             "$CONTAINER_MODULE" \
             "$CUDA_ARCHITECTURES" \
-            "$SLURM_PARTITION" \
-            "$SLURM_ACCOUNT" \
-            "$SLURM_QOS" \
-            "$SLURM_CPUS" \
-            "$SLURM_MEMORY" \
-            "$SLURM_WALLTIME" \
+            "$PBS_QUEUE" \
+            "$PBS_NCPUS" \
+            "$PBS_WALLTIME" \
             "$RUN_KEY"
 
           ssh "${ssh_options[@]}" "$target" \
@@ -446,57 +437,101 @@ jobs:
           container_runtime="$2"
           container_module="$3"
           cuda_architectures="$4"
-          slurm_partition="$5"
-          slurm_account="$6"
-          slurm_qos="$7"
-          slurm_cpus="$8"
-          slurm_memory="$9"
-          slurm_walltime="${10}"
-          run_key="${11}"
+          pbs_queue="$5"
+          pbs_ncpus="$6"
+          pbs_walltime="$7"
+          run_key="$8"
 
           cd "$release_dir"
           release_dir="$PWD"
           results_dir="$release_dir/ci-results/$run_key"
           mkdir -p "$results_dir"
 
-          if ! command -v sbatch >/dev/null 2>&1 && [[ -r /etc/profile ]]; then
+          if [[ -r /etc/profile.d/pbs.sh ]]; then
             set +u
-            source /etc/profile
+            source /etc/profile.d/pbs.sh
             set -u
           fi
-          command -v sbatch
+          command -v qsub
+          command -v qstat
+          command -v qdel
+          qstat -Qf "$pbs_queue" >/dev/null
 
-          sbatch_arguments=(
-            --wait
-            --parsable
-            --nodes=1
-            --ntasks=1
-            --cpus-per-task="$slurm_cpus"
-            --gres=gpu:1
-            --mem="$slurm_memory"
-            --time="$slurm_walltime"
-            --job-name=amsc-nbody-test
-            --output="$results_dir/slurm-%j.out"
-            --error="$results_dir/slurm-%j.out"
-            --export="ALL,NBODY_SOURCE_DIR=$release_dir,NBODY_IMAGE=$release_dir/nbody-tests.sif,NBODY_TEST_MODE=all,NBODY_RESULTS_DIR=$results_dir,NBODY_CONTAINER_RUNTIME=$container_runtime,NBODY_CONTAINER_MODULE=$container_module,NBODY_CUDA_ARCHITECTURES=$cuda_architectures"
-          )
+          requested_resources="select=1:ncpus=${pbs_ncpus}:ngpus=1"
+          job_environment="NBODY_SOURCE_DIR=$release_dir"
+          job_environment+=",NBODY_IMAGE=$release_dir/nbody-tests.sif"
+          job_environment+=",NBODY_TEST_MODE=all"
+          job_environment+=",NBODY_RESULTS_DIR=$results_dir"
+          job_environment+=",NBODY_CONTAINER_RUNTIME=$container_runtime"
+          job_environment+=",NBODY_CONTAINER_MODULE=$container_module"
+          job_environment+=",NBODY_CUDA_ARCHITECTURES=$cuda_architectures"
+          job_environment+=",NBODY_JOBS=$pbs_ncpus"
 
-          [[ -n "$slurm_partition" ]] && sbatch_arguments+=(--partition="$slurm_partition")
-          [[ -n "$slurm_account" ]] && sbatch_arguments+=(--account="$slurm_account")
-          [[ -n "$slurm_qos" ]] && sbatch_arguments+=(--qos="$slurm_qos")
+          job_id=""
+          cleanup_remote_job() {
+            if [[ -n "$job_id" ]] && qstat "$job_id" >/dev/null 2>&1; then
+              qdel "$job_id" || true
+            fi
+          }
+          trap cleanup_remote_job EXIT INT TERM
 
-          set +e
-          submission_output="$(
-            sbatch \
-              "${sbatch_arguments[@]}" \
-              containers/slurm-google-tests.sbatch \
-              2>&1
+          job_id="$(
+            qsub \
+              -q "$pbs_queue" \
+              -l "$requested_resources" \
+              -l "walltime=$pbs_walltime" \
+              -N amsc-nbody-test \
+              -j oe \
+              -o "$results_dir/pbs-job.out" \
+              -v "$job_environment" \
+              containers/openpbs-google-tests.pbs
           )"
-          submission_status=$?
-          set -e
+          printf 'Submitted OpenPBS GPU job %s with %s\n' \
+            "$job_id" \
+            "$requested_resources" | tee "$results_dir/pbs-submission.txt"
 
-          printf '%s\n' "$submission_output" | tee "$results_dir/slurm-submission.txt"
-          exit "$submission_status"
+          job_finished=false
+          for attempt in {1..360}; do
+            job_state="$(
+              qstat -f "$job_id" 2>/dev/null \
+                | awk '$1 == "job_state" { print $3; exit }' \
+                || true
+            )"
+            case "$job_state" in
+              F|X|"")
+                job_finished=true
+                break
+                ;;
+              *)
+                sleep 10
+                ;;
+            esac
+          done
+
+          if [[ "$job_finished" != true ]]; then
+            echo "Timed out waiting for OpenPBS GPU job $job_id" >&2
+            exit 1
+          fi
+
+          for attempt in {1..12}; do
+            [[ -s "$results_dir/pbs-exit-code" ]] && break
+            sleep 5
+          done
+
+          if [[ ! -s "$results_dir/pbs-exit-code" ]]; then
+            echo "OpenPBS job $job_id completed without an exit-code file" >&2
+            exit 1
+          fi
+
+          job_exit_code="$(<"$results_dir/pbs-exit-code")"
+          if [[ ! "$job_exit_code" =~ ^[0-9]+$ ]]; then
+            echo "Invalid OpenPBS job exit code: $job_exit_code" >&2
+            exit 1
+          fi
+
+          job_id=""
+          trap - EXIT INT TERM
+          exit "$job_exit_code"
           REMOTE_SCRIPT
 
       - name: Download cluster test results
@@ -558,7 +593,7 @@ jobs:
             echo "- VPN readiness: \`${{ steps.vpn_wait.outcome }}\`"
             echo "- SSH connectivity: \`${{ steps.ssh.outcome }}\`"
             echo "- Cluster deployment: \`${{ steps.deploy.outcome }}\`"
-            echo "- Slurm GoogleTests: \`${{ steps.cluster_test.outcome }}\`"
+            echo "- OpenPBS GPU GoogleTests: \`${{ steps.cluster_test.outcome }}\`"
             echo "- Result collection: \`${{ steps.collect.outcome }}\`"
             if test -f "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"; then
               echo

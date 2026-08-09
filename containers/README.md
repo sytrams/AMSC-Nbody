@@ -60,7 +60,20 @@ NBODY_CUDA_ARCHITECTURES='80;90' \
 
 The host NVIDIA driver must support CUDA 12.8 because Apptainer passes the host
 driver into the container. If the cluster driver is older, change the `From:`
-tag in `nbody-tests.def` to a compatible CUDA development image before building.
+tag in `nbody-tests.def` to a compatible CUDA base image before building.
+
+## OpenPBS
+
+The GitHub Actions workflow submits the test suite to the `gpu` queue with a
+single GPU. For a manual run, submit from the project root:
+
+```bash
+qsub containers/openpbs-google-tests.pbs
+```
+
+The job runs the container only after OpenPBS places it on the allocated GPU
+compute node; the SSH/login node is used only to deploy files and submit/query
+the job.
 
 ## Slurm
 
@@ -88,8 +101,9 @@ Do not request a GPU for CPU-only jobs. In that case, run the image without
 `.github/workflows/main.yml` builds the SIF on the GitHub runner, packages the
 tracked source at the triggering commit, connects to the cluster over the
 PoliMi VPN, and deploys both files to a commit-specific release directory. It
-then submits `slurm-google-tests.sbatch`, waits for all CPU and CUDA GoogleTests,
-and uploads the test log, JUnit XML, Slurm exit code, and scheduler output.
+then submits `openpbs-google-tests.pbs` to a GPU compute node, waits for all CPU
+and CUDA GoogleTests, and uploads the test log, JUnit XML, OpenPBS exit code, and
+scheduler output.
 
 The workflow uses the existing VPN and SSH secrets. Cluster-specific settings
 can be supplied as GitHub Actions repository variables:
@@ -98,8 +112,7 @@ can be supplied as GitHub Actions repository variables:
   cluster's `$SCRATCH`, `$WORK`, or `$HOME`, in that order)
 - `CLUSTER_CONTAINER_RUNTIME` (default `apptainer`)
 - `CLUSTER_CONTAINER_MODULE` (optional)
-- `CUDA_ARCHITECTURES` (default `80`)
-- `SLURM_PARTITION`, `SLURM_ACCOUNT`, and `SLURM_QOS` (optional)
-- `SLURM_CPUS_PER_TASK` (default `8`)
-- `SLURM_MEMORY` (default `16G`)
-- `SLURM_WALLTIME` (default `00:30:00`)
+- `CUDA_ARCHITECTURES` (default `89`)
+- `PBS_QUEUE` (default `gpu`)
+- `PBS_NCPUS` (default `2`)
+- `PBS_WALLTIME` (default `00:30:00`)
