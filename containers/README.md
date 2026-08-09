@@ -94,7 +94,8 @@ and uploads the test log, JUnit XML, Slurm exit code, and scheduler output.
 The workflow uses the existing VPN and SSH secrets. Cluster-specific settings
 can be supplied as GitHub Actions repository variables:
 
-- `CLUSTER_PROJECT_ROOT` (default `AMSC-Nbody-ci`)
+- `CLUSTER_PROJECT_ROOT` (optional; defaults to `AMSC-Nbody-ci` under the
+  cluster's `$SCRATCH`, `$WORK`, or `$HOME`, in that order)
 - `CLUSTER_CONTAINER_RUNTIME` (default `apptainer`)
 - `CLUSTER_CONTAINER_MODULE` (optional)
 - `CUDA_ARCHITECTURES` (default `80`)

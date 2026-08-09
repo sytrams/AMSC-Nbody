@@ -112,6 +112,7 @@ jobs:
           test -s "$image_path"
           apptainer inspect "$image_path"
           echo "image=$image_path" >> "$GITHUB_OUTPUT"
+          echo "image_bytes=$(stat --format=%s "$image_path")" >> "$GITHUB_OUTPUT"
 
       - name: Package tracked source
         id: bundle
@@ -229,18 +230,22 @@ jobs:
         env:
           ARCHIVE_PATH: ${{ steps.bundle.outputs.archive }}
           IMAGE_PATH: ${{ steps.container.outputs.image }}
-          CLUSTER_PROJECT_ROOT: ${{ vars.CLUSTER_PROJECT_ROOT || 'AMSC-Nbody-ci' }}
+          IMAGE_BYTES: ${{ steps.container.outputs.image_bytes }}
+          CLUSTER_PROJECT_ROOT: ${{ vars.CLUSTER_PROJECT_ROOT }}
         run: |
           set -euxo pipefail
 
-          if [[ ! "$CLUSTER_PROJECT_ROOT" =~ ^[A-Za-z0-9_./-]+$ ]]; then
+          if [[ -n "$CLUSTER_PROJECT_ROOT" && ! "$CLUSTER_PROJECT_ROOT" =~ ^[A-Za-z0-9_./-]+$ ]]; then
             echo "CLUSTER_PROJECT_ROOT contains unsupported characters" >&2
             exit 1
           fi
 
+          if [[ ! "$IMAGE_BYTES" =~ ^[1-9][0-9]*$ ]]; then
+            echo "Container image size is invalid: $IMAGE_BYTES" >&2
+            exit 1
+          fi
+
           target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
-          release_dir="${CLUSTER_PROJECT_ROOT%/}/releases/${GITHUB_SHA}"
-          remote_archive="$release_dir/source.tar.gz"
           ssh_options=(
             -i ~/.ssh/cluster
             -o BatchMode=yes
@@ -251,16 +256,81 @@ jobs:
             -o ConnectionAttempts=2
           )
 
-          ssh "${ssh_options[@]}" "$target" \
-            "mkdir -p '$release_dir'"
+          printf -v layout_arguments '%q ' \
+            "$CLUSTER_PROJECT_ROOT" \
+            "$GITHUB_SHA" \
+            "$IMAGE_BYTES"
+          release_dir="$(
+            ssh "${ssh_options[@]}" "$target" \
+              "bash -s -- $layout_arguments" <<'REMOTE_LAYOUT'
+          set -euo pipefail
+
+          requested_root="$1"
+          commit_sha="$2"
+          image_bytes="$3"
+          required_kib=$(( (image_bytes + 1023) / 1024 + 524288 ))
+          candidates=()
+
+          if [[ -n "$requested_root" ]]; then
+            candidates+=("$requested_root")
+          else
+            [[ -n "${SCRATCH:-}" ]] && candidates+=("${SCRATCH%/}/AMSC-Nbody-ci")
+            [[ -n "${WORK:-}" ]] && candidates+=("${WORK%/}/AMSC-Nbody-ci")
+            candidates+=("${HOME%/}/AMSC-Nbody-ci")
+          fi
+
+          release_dir=""
+          for candidate in "${candidates[@]}"; do
+            candidate_release="${candidate%/}/releases/$commit_sha"
+            if ! mkdir -p "$candidate_release" 2>/dev/null; then
+              printf 'Cluster storage is not writable: %s\n' "$candidate" >&2
+              continue
+            fi
+
+            candidate="$(cd "$candidate" && pwd -P)"
+            available_kib="$(df -Pk "$candidate" | awk 'NR == 2 { print $4 }')"
+            if [[ "$available_kib" =~ ^[0-9]+$ ]] && (( available_kib >= required_kib )); then
+              release_dir="${candidate%/}/releases/$commit_sha"
+              printf 'Using cluster storage %s (%s KiB available)\n' \
+                "$candidate" \
+                "$available_kib" >&2
+              break
+            fi
+
+            printf 'Cluster storage has insufficient space: %s (%s KiB available, %s KiB required)\n' \
+              "$candidate" \
+              "${available_kib:-unknown}" \
+              "$required_kib" >&2
+          done
+
+          if [[ -z "$release_dir" ]]; then
+            echo "No cluster filesystem has enough room for the test container." >&2
+            echo "Set CLUSTER_PROJECT_ROOT to a shared scratch or work filesystem." >&2
+            exit 1
+          fi
+
+          printf '%s\n' "$release_dir"
+          REMOTE_LAYOUT
+          )"
+
+          remote_archive="$release_dir/source.tar.gz"
+          remote_image="$release_dir/.nbody-tests-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sif.part"
+          cleanup_remote_upload() {
+            ssh "${ssh_options[@]}" "$target" \
+              "rm -f '$remote_image'" || true
+          }
+          trap cleanup_remote_upload ERR INT TERM
+
           scp "${ssh_options[@]}" \
             "$ARCHIVE_PATH" \
             "$target:$remote_archive"
           scp "${ssh_options[@]}" \
             "$IMAGE_PATH" \
-            "$target:$release_dir/nbody-tests.sif"
+            "$target:$remote_image"
           ssh "${ssh_options[@]}" "$target" \
-            "tar -xzf '$remote_archive' -C '$release_dir'"
+            "mv '$remote_image' '$release_dir/nbody-tests.sif' && tar -xzf '$remote_archive' -C '$release_dir'"
+
+          trap - ERR INT TERM
 
           echo "release=$release_dir" >> "$GITHUB_OUTPUT"
 
