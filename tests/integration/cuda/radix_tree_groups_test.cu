@@ -10,6 +10,7 @@
 #include <string>
 #include <vector>
 
+#include "cuda_test.hpp"
 #include "morton_leaf_groups.hpp"
 #include "tree_builder.hpp"
 
@@ -662,80 +663,59 @@ void testGeneratedCase()
 
 } // namespace
 
-int runRadixTreeUniqueKeysTestSuite()
+class RadixTreeGroupsTest : public CudaTest
 {
-    try
-    {
-        int deviceCount = 0;
+};
 
-        checkCuda(
-            cudaGetDeviceCount(&deviceCount),
-            "cudaGetDeviceCount");
-
-        require(
-            deviceCount > 0,
-            "No CUDA-capable GPU is available");
-
-        runCase(
-            "single particle",
-            {42u},
-            {0u},
-            {2.0f},
-            {1.0f},
-            {2.0f},
-            {3.0f});
-
-        runCase(
-            "all duplicate Morton keys",
-            {7u, 7u, 7u, 7u},
-            {3u, 0u, 2u, 1u},
-            {1.0f, 2.0f, 3.0f, 4.0f},
-            {0.0f, 10.0f, 20.0f, 30.0f},
-            {5.0f, 4.0f, 3.0f, 2.0f},
-            {-1.0f, 0.0f, 1.0f, 2.0f});
-
-        runCase(
-            "mixed Morton groups",
-            {1u, 1u, 2u, 4u, 4u, 4u, 9u},
-            {6u, 2u, 4u, 0u, 5u, 1u, 3u},
-            {1.0f, 1.5f, 2.0f, 2.5f,
-             3.0f, 3.5f, 4.0f},
-            {0.0f, 1.0f, 2.0f, 3.0f,
-             4.0f, 5.0f, 6.0f},
-            {6.0f, 5.0f, 4.0f, 3.0f,
-             2.0f, 1.0f, 0.0f},
-            {-3.0f, -2.0f, -1.0f, 0.0f,
-             1.0f, 2.0f, 3.0f});
-
-        runCase(
-            "all unique Morton keys",
-            {0u, 4u, 8u, 12u},
-            {2u, 0u, 3u, 1u},
-            {1.0f, 2.0f, 3.0f, 4.0f},
-            {10.0f, 20.0f, 30.0f, 40.0f},
-            {-1.0f, -2.0f, -3.0f, -4.0f},
-            {5.0f, 15.0f, 25.0f, 35.0f});
-
-        testGeneratedCase();
-
-        std::cout
-            << "\nAll radix-group integration "
-            << "tests passed.\n";
-
-        return 0;
-    }
-    catch (const std::exception& error)
-    {
-        std::cerr
-            << "\n[FAIL] "
-            << error.what()
-            << '\n';
-
-        return 1;
-    }
+TEST_F(RadixTreeGroupsTest, HandlesSingleParticle)
+{
+    runCase(
+        "single particle",
+        {42u},
+        {0u},
+        {2.0f},
+        {1.0f},
+        {2.0f},
+        {3.0f});
 }
 
-TEST(RadixTreeUniqueKeysCudaTest, CompleteSuite)
+TEST_F(RadixTreeGroupsTest, HandlesAllDuplicateMortonKeys)
 {
-    EXPECT_EQ(runRadixTreeUniqueKeysTestSuite(), 0);
+    runCase(
+        "all duplicate Morton keys",
+        {7u, 7u, 7u, 7u},
+        {3u, 0u, 2u, 1u},
+        {1.0f, 2.0f, 3.0f, 4.0f},
+        {0.0f, 10.0f, 20.0f, 30.0f},
+        {5.0f, 4.0f, 3.0f, 2.0f},
+        {-1.0f, 0.0f, 1.0f, 2.0f});
+}
+
+TEST_F(RadixTreeGroupsTest, HandlesMixedMortonGroups)
+{
+    runCase(
+        "mixed Morton groups",
+        {1u, 1u, 2u, 4u, 4u, 4u, 9u},
+        {6u, 2u, 4u, 0u, 5u, 1u, 3u},
+        {1.0f, 1.5f, 2.0f, 2.5f, 3.0f, 3.5f, 4.0f},
+        {0.0f, 1.0f, 2.0f, 3.0f, 4.0f, 5.0f, 6.0f},
+        {6.0f, 5.0f, 4.0f, 3.0f, 2.0f, 1.0f, 0.0f},
+        {-3.0f, -2.0f, -1.0f, 0.0f, 1.0f, 2.0f, 3.0f});
+}
+
+TEST_F(RadixTreeGroupsTest, HandlesAllUniqueMortonKeys)
+{
+    runCase(
+        "all unique Morton keys",
+        {0u, 4u, 8u, 12u},
+        {2u, 0u, 3u, 1u},
+        {1.0f, 2.0f, 3.0f, 4.0f},
+        {10.0f, 20.0f, 30.0f, 40.0f},
+        {-1.0f, -2.0f, -3.0f, -4.0f},
+        {5.0f, 15.0f, 25.0f, 35.0f});
+}
+
+TEST_F(RadixTreeGroupsTest, HandlesGeneratedGroupedInput)
+{
+    testGeneratedCase();
 }

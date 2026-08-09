@@ -1,4 +1,4 @@
-name: NVIDIA cluster tests
+name: VPN SSH operation
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
       - codex/automation-test
 
 jobs:
-  cluster-tests:
+  connect:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 30
 
     steps:
       - name: Check out repository
@@ -67,56 +67,7 @@ jobs:
           command -v gpauth
           gpclient --version
 
-      - name: Install Apptainer builder
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          set -euxo pipefail
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo add-apt-repository --yes ppa:apptainer/ppa
-          sudo apt-get update
-          sudo apt-get install --yes apptainer
-
-          apptainer version
-
-      - name: Build NVIDIA test container
-        id: container
-        timeout-minutes: 30
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          image_path="$RUNNER_TEMP/nbody-tests.sif"
-          cache_path="$RUNNER_TEMP/apptainer-cache"
-          temporary_path="$RUNNER_TEMP/apptainer-tmp"
-          mkdir -p "$cache_path" "$temporary_path"
-
-          sudo env \
-            APPTAINER_CACHEDIR="$cache_path" \
-            APPTAINER_TMPDIR="$temporary_path" \
-            apptainer build --force "$image_path" Singularity.def
-          sudo chown "$(id -u):$(id -g)" "$image_path"
-
-          test -s "$image_path"
-          echo "image=$image_path" >> "$GITHUB_OUTPUT"
-
-      - name: Package tracked source
-        id: bundle
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          archive_path="$RUNNER_TEMP/amsc-nbody-${GITHUB_SHA}.tar.gz"
-          git archive \
-            --format=tar.gz \
-            --output="$archive_path" \
-            "$GITHUB_SHA"
-
-          test -s "$archive_path"
-          echo "archive=$archive_path" >> "$GITHUB_OUTPUT"
-
-      - name: Configure cluster SSH credential
+      - name: Configure CINECA SSH credential
         shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -124,11 +75,11 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/cluster
-          printf '%s\n' "$SSH_CERTIFICATE" > ~/.ssh/cluster-cert.pub
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/cineca
+          printf '%s\n' "$SSH_CERTIFICATE" > ~/.ssh/cineca-cert.pub
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/cluster ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/cluster-cert.pub
+          chmod 600 ~/.ssh/cineca ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/cineca-cert.pub
 
       - name: Install Python and browser dependencies
         shell: bash
@@ -141,6 +92,7 @@ jobs:
 
       - name: Authenticate and keep VPN connected
         id: vpn
+        background: true
         shell: bash
         env:
           POLIMI_USERNAME: ${{secrets.POLIMI_USER}}
@@ -150,24 +102,9 @@ jobs:
           VPN_READY_FILE: ${{ runner.temp }}/vpn-ready
           VPN_FAILED_FILE: ${{ runner.temp }}/vpn-failed
           VPN_DIAGNOSTICS_DIR: ${{ runner.temp }}/vpn-auth-diagnostics
-          VPN_PID_FILE: ${{ runner.temp }}/vpn-auth.pid
-          VPN_LOG_FILE: ${{ runner.temp }}/vpn-auth-diagnostics/vpn.log
           PYTHONUNBUFFERED: "1"
         run: |
-          set -euo pipefail
-
-          mkdir -p "$VPN_DIAGNOSTICS_DIR"
-          nohup python3 vpn_remote_auth.py \
-            > "$VPN_LOG_FILE" \
-            2>&1 &
-          vpn_pid=$!
-          echo "$vpn_pid" > "$VPN_PID_FILE"
-
-          sleep 1
-          if ! kill -0 "$vpn_pid" 2>/dev/null; then
-            cat "$VPN_LOG_FILE"
-            exit 1
-          fi
+          exec python3 vpn_remote_auth.py
 
       - name: Wait for VPN readiness
         id: vpn_wait
@@ -183,14 +120,6 @@ jobs:
               exit 1
             fi
 
-            if test -f "$RUNNER_TEMP/vpn-auth.pid"; then
-              vpn_pid=$(<"$RUNNER_TEMP/vpn-auth.pid")
-              if ! kill -0 "$vpn_pid" 2>/dev/null; then
-                cat "$RUNNER_TEMP/vpn-auth-diagnostics/vpn.log"
-                exit 1
-              fi
-            fi
-
             sleep 1
           done
 
@@ -201,7 +130,7 @@ jobs:
         id: ssh
         timeout-minutes: 1
         run: |
-          ssh -T -i ~/.ssh/cluster \
+          ssh -T -i ~/.ssh/cineca \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
@@ -211,268 +140,13 @@ jobs:
             "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}" \
             true
 
-      - name: Deploy source and test container
-        id: deploy
-        timeout-minutes: 20
-        shell: bash
-        env:
-          ARCHIVE_PATH: ${{ steps.bundle.outputs.archive }}
-          IMAGE_PATH: ${{ steps.container.outputs.image }}
-          CLUSTER_PROJECT_ROOT: ${{ vars.CLUSTER_PROJECT_ROOT || 'AMSC-Nbody-ci' }}
-        run: |
-          set -euxo pipefail
-
-          if [[ ! "$CLUSTER_PROJECT_ROOT" =~ ^[A-Za-z0-9_./-]+$ ]]; then
-            echo "CLUSTER_PROJECT_ROOT contains unsupported characters" >&2
-            exit 1
-          fi
-
-          target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
-          release_dir="${CLUSTER_PROJECT_ROOT%/}/releases/${GITHUB_SHA}"
-          remote_archive="$release_dir/source.tar.gz"
-          ssh_options=(
-            -i ~/.ssh/cluster
-            -o BatchMode=yes
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -o NumberOfPasswordPrompts=0
-            -o ConnectTimeout=30
-            -o ConnectionAttempts=2
-          )
-
-          ssh "${ssh_options[@]}" "$target" \
-            "mkdir -p '$release_dir/ci-results'"
-          scp "${ssh_options[@]}" \
-            "$ARCHIVE_PATH" \
-            "$target:$remote_archive"
-          scp "${ssh_options[@]}" \
-            "$IMAGE_PATH" \
-            "$target:$release_dir/nbody-tests.sif"
-          ssh "${ssh_options[@]}" "$target" \
-            "tar -xzf '$remote_archive' -C '$release_dir'"
-
-          echo "release=$release_dir" >> "$GITHUB_OUTPUT"
-
-      - name: Submit and wait for GPU tests
-        id: cluster_test
-        timeout-minutes: 60
-        shell: bash
-        env:
-          RELEASE_DIR: ${{ steps.deploy.outputs.release }}
-          CONTAINER_RUNTIME: ${{ vars.CLUSTER_CONTAINER_RUNTIME || 'apptainer' }}
-          CONTAINER_MODULE: ${{ vars.CLUSTER_CONTAINER_MODULE }}
-          CUDA_ARCHITECTURES: ${{ vars.CUDA_ARCHITECTURES || '89' }}
-          PBS_QUEUE: ${{ vars.PBS_QUEUE || 'gpu' }}
-          PBS_NCPUS: ${{ vars.PBS_NCPUS || '2' }}
-          PBS_WALLTIME: ${{ vars.PBS_WALLTIME || '00:30:00' }}
-          ENABLE_COMPUTE_SANITIZER: ${{ vars.ENABLE_COMPUTE_SANITIZER || 'OFF' }}
-          RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
-        run: |
-          set -euxo pipefail
-
-          for value in \
-            "$RELEASE_DIR" \
-            "$CONTAINER_RUNTIME" \
-            "$CONTAINER_MODULE" \
-            "$CUDA_ARCHITECTURES" \
-            "$PBS_QUEUE" \
-            "$ENABLE_COMPUTE_SANITIZER" \
-            "$RUN_KEY"; do
-            if [[ ! "$value" =~ ^[A-Za-z0-9_./\;+:=-]*$ ]]; then
-              echo "A cluster configuration value contains unsupported characters" >&2
-              exit 1
-            fi
-          done
-
-          if [[ "$CONTAINER_RUNTIME" != "singularity" && "$CONTAINER_RUNTIME" != "apptainer" ]]; then
-            echo "CLUSTER_CONTAINER_RUNTIME must be singularity or apptainer" >&2
-            exit 1
-          fi
-
-          if [[ ! "$PBS_NCPUS" =~ ^[1-9][0-9]*$ ]]; then
-            echo "PBS_NCPUS must be a positive integer" >&2
-            exit 1
-          fi
-
-          if [[ ! "$PBS_WALLTIME" =~ ^[0-9]{2,3}:[0-5][0-9]:[0-5][0-9]$ ]]; then
-            echo "PBS_WALLTIME must use HH:MM:SS format" >&2
-            exit 1
-          fi
-
-          target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
-          ssh_options=(
-            -i ~/.ssh/cluster
-            -o BatchMode=yes
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -o NumberOfPasswordPrompts=0
-            -o ConnectTimeout=30
-            -o ConnectionAttempts=2
-          )
-          printf -v remote_arguments '%q ' \
-            "$RELEASE_DIR" \
-            "$CONTAINER_RUNTIME" \
-            "$CONTAINER_MODULE" \
-            "$CUDA_ARCHITECTURES" \
-            "$PBS_QUEUE" \
-            "$PBS_NCPUS" \
-            "$PBS_WALLTIME" \
-            "$ENABLE_COMPUTE_SANITIZER" \
-            "$RUN_KEY"
-
-          ssh "${ssh_options[@]}" "$target" \
-            "bash -s -- $remote_arguments" <<'REMOTE_SCRIPT'
-          set -euo pipefail
-
-          release_dir="$1"
-          container_runtime="$2"
-          container_module="$3"
-          cuda_architectures="$4"
-          pbs_queue="$5"
-          pbs_ncpus="$6"
-          pbs_walltime="$7"
-          enable_compute_sanitizer="$8"
-          run_key="$9"
-
-          cd "$release_dir"
-          release_dir="$PWD"
-          results_dir="$release_dir/ci-results/$run_key"
-          mkdir -p "$results_dir"
-
-          # Cluster profile scripts are written for interactive/login shells and
-          # may reference optional variables (for example MANPATH) that are not
-          # initialized in this non-interactive SSH session. Temporarily disable
-          # nounset while loading PBS, then restore strict mode immediately.
-          set +u
-          . /etc/profile.d/pbs.sh
-          set -u
-          command -v qsub
-          command -v qstat
-          command -v qdel
-          qstat -Qf "$pbs_queue" >/dev/null
-
-          requested_resources="select=1:ncpus=${pbs_ncpus}:ngpus=1"
-          job_environment="SOURCE_DIR=$release_dir"
-          job_environment+=",IMAGE_PATH=$release_dir/nbody-tests.sif"
-          job_environment+=",RESULTS_DIR=$results_dir"
-          job_environment+=",CONTAINER_RUNTIME=$container_runtime"
-          job_environment+=",CONTAINER_MODULE=$container_module"
-          job_environment+=",CUDA_ARCHITECTURES=$cuda_architectures"
-          job_environment+=",BUILD_JOBS=$pbs_ncpus"
-          job_environment+=",NBODY_ENABLE_COMPUTE_SANITIZER_TESTS=$enable_compute_sanitizer"
-
-          job_id=""
-          cleanup_remote_job() {
-            if [[ -n "$job_id" ]] && qstat "$job_id" >/dev/null 2>&1; then
-              qdel "$job_id" || true
-            fi
-          }
-          trap cleanup_remote_job EXIT INT TERM
-
-          job_id="$(
-            qsub \
-              -q "$pbs_queue" \
-              -l "$requested_resources" \
-              -l "walltime=$pbs_walltime" \
-              -N amsc-nbody-test \
-              -j oe \
-              -o "$results_dir/pbs-job.out" \
-              -v "$job_environment" \
-              ci/run_gpu_tests.pbs
-          )"
-          printf 'Submitted OpenPBS GPU job %s with %s\n' \
-            "$job_id" \
-            "$requested_resources"
-
-          job_finished=false
-          for attempt in {1..360}; do
-            job_state="$(
-              qstat -f "$job_id" 2>/dev/null \
-                | awk '$1 == "job_state" { print $3; exit }' \
-                || true
-            )"
-            case "$job_state" in
-              F|X|"")
-                job_finished=true
-                break
-                ;;
-              *)
-                sleep 10
-                ;;
-            esac
-          done
-
-          if [[ "$job_finished" != true ]]; then
-            echo "Timed out waiting for OpenPBS GPU job $job_id" >&2
-            exit 1
-          fi
-
-          for attempt in {1..12}; do
-            [[ -s "$results_dir/pbs-exit-code" ]] && break
-            sleep 5
-          done
-
-          if [[ ! -s "$results_dir/pbs-exit-code" ]]; then
-            echo "OpenPBS job $job_id completed without an exit-code file" >&2
-            exit 1
-          fi
-
-          job_exit_code="$(<"$results_dir/pbs-exit-code")"
-          if [[ ! "$job_exit_code" =~ ^[0-9]+$ ]]; then
-            echo "Invalid OpenPBS job exit code: $job_exit_code" >&2
-            exit 1
-          fi
-
-          job_id=""
-          trap - EXIT INT TERM
-          exit "$job_exit_code"
-          REMOTE_SCRIPT
-
-      - name: Download cluster test results
-        id: collect
-        if: ${{ always() && steps.deploy.outcome == 'success' }}
-        timeout-minutes: 10
-        shell: bash
-        env:
-          RELEASE_DIR: ${{ steps.deploy.outputs.release }}
-        run: |
-          set -euxo pipefail
-
-          target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
-          results_path="$RUNNER_TEMP/cluster-test-results"
-          mkdir -p "$results_path"
-
-          scp \
-            -r \
-            -i ~/.ssh/cluster \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o NumberOfPasswordPrompts=0 \
-            -o ConnectTimeout=30 \
-            -o ConnectionAttempts=2 \
-            "$target:$RELEASE_DIR/ci-results/." \
-            "$results_path/"
-
       - name: Stop VPN
+        cancel: vpn
+
+      - name: Emergency VPN cleanup
         if: always()
         shell: bash
-        run: |
-          set +e
-
-          if test -f "$RUNNER_TEMP/vpn-auth.pid"; then
-            vpn_pid=$(<"$RUNNER_TEMP/vpn-auth.pid")
-            if kill -0 "$vpn_pid" 2>/dev/null; then
-              kill -TERM "$vpn_pid"
-              for attempt in {1..30}; do
-                kill -0 "$vpn_pid" 2>/dev/null || break
-                sleep 1
-              done
-              kill -KILL "$vpn_pid" 2>/dev/null || true
-            fi
-          fi
-
-          sudo -n gpclient disconnect || true
+        run: sudo -n gpclient disconnect || true
 
       - name: Write VPN authentication summary
         if: ${{ always() }}
@@ -484,9 +158,6 @@ jobs:
             echo "- VPN background process: \`${{ steps.vpn.outcome }}\`"
             echo "- VPN readiness check: \`${{ steps.vpn_wait.outcome }}\`"
             echo "- SSH connectivity check: \`${{ steps.ssh.outcome }}\`"
-            echo "- Cluster deployment: \`${{ steps.deploy.outcome }}\`"
-            echo "- GPU test job: \`${{ steps.cluster_test.outcome }}\`"
-            echo "- Result collection: \`${{ steps.collect.outcome }}\`"
             if test -f "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"; then
               echo
               cat "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"
@@ -501,12 +172,3 @@ jobs:
           path: ${{ runner.temp }}/vpn-auth-diagnostics/
           if-no-files-found: ignore
           retention-days: 3
-
-      - name: Upload cluster test results
-        if: ${{ always() && steps.collect.outcome == 'success' }}
-        uses: actions/upload-artifact@v4
-        with:
-          name: cluster-test-results-${{ github.sha }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/cluster-test-results/
-          if-no-files-found: warn
-          retention-days: 14

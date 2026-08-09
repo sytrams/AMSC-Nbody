@@ -14,6 +14,7 @@
 #include <string>
 #include <vector>
 
+#include "cuda_test.hpp"
 #include "tree_builder.hpp"
 
 namespace {
@@ -621,6 +622,10 @@ void testRandomCases()
 
     for (int n : sizes)
     {
+        SCOPED_TRACE(
+            "seed=0xC0FFEE, particleCount=" +
+            std::to_string(n));
+
         std::vector<std::uint32_t> keys(static_cast<std::size_t>(n));
         for (std::uint32_t& key : keys)
             key = generator();
@@ -654,32 +659,36 @@ void testRandomCases()
 
 } // namespace
 
-int runTreeBuilderTestSuite()
+class TreeBuilderTest : public CudaTest
 {
-    try
-    {
-        int deviceCount = 0;
-        CUDA_CHECK(cudaGetDeviceCount(&deviceCount));
-        require(deviceCount > 0, "No CUDA-capable GPU is available");
+};
 
-        testSingleLeaf();
-        testTwoLeavesExactTopology();
-        testBalancedFourExactTopology();
-        testPermutationAndCenterOfMass();
-        testDuplicateMortonKeys();
-        testRandomCases();
-
-        std::cout << "\nAll tree-builder tests passed.\n";
-        return 0;
-    }
-    catch (const std::exception& error)
-    {
-        std::cerr << "\n[FAIL] " << error.what() << '\n';
-        return 1;
-    }
+TEST_F(TreeBuilderTest, HandlesSingleLeaf)
+{
+    testSingleLeaf();
 }
 
-TEST(TreeBuilderCudaTest, CompleteSuite)
+TEST_F(TreeBuilderTest, BuildsExactTwoLeafTopology)
 {
-    EXPECT_EQ(runTreeBuilderTestSuite(), 0);
+    testTwoLeavesExactTopology();
+}
+
+TEST_F(TreeBuilderTest, BuildsExactBalancedFourLeafTopology)
+{
+    testBalancedFourExactTopology();
+}
+
+TEST_F(TreeBuilderTest, AppliesPermutationAndComputesCenterOfMass)
+{
+    testPermutationAndCenterOfMass();
+}
+
+TEST_F(TreeBuilderTest, HandlesDuplicateMortonKeys)
+{
+    testDuplicateMortonKeys();
+}
+
+TEST_F(TreeBuilderTest, HandlesDeterministicGeneratedCases)
+{
+    testRandomCases();
 }

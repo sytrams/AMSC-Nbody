@@ -29,8 +29,8 @@
 # CMake and generated test output
 /build*/
 /cmake-build-*/
+/Testing/
 /ci-results/
-/nbody-tests.sif
 *.exe
 *.out
 *.app

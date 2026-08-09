@@ -8,9 +8,10 @@
 #include <random>
 #include <stdexcept>
 #include <string>
-#include <vector>
 #include <cmath>
+#include <vector>
 
+#include "cuda_test.hpp"
 #include "morton_leaf_groups.hpp"
 #include "octree_builder.hpp"
 #include "radix_to_octree.hpp"
@@ -1072,79 +1073,50 @@ void testRandom()
 
 } // namespace
 
-int runOctreeMassCenterOfMassTestSuite()
+class OctreePhysicsTest : public CudaTest
 {
-    try
-    {
-        int deviceCount = 0;
+};
 
-        checkCuda(
-            cudaGetDeviceCount(
-                &deviceCount),
-            "cudaGetDeviceCount");
-
-        require(
-            deviceCount > 0,
-            "No CUDA-capable GPU available");
-
-        runCase(
-            "single occupied cell",
-            {0u});
-
-        runCase(
-            "duplicate particles in one cell",
-            {
-                7u,
-                7u,
-                7u,
-                7u
-            });
-
-        runCase(
-            "two level-one octants",
-            {
-                0u,
-                1u << 29
-            });
-
-        runCase(
-            "shared level-one cell",
-            {
-                0u,
-                1u << 26
-            });
-
-        runCase(
-            "mixed occupied cells",
-            {
-                0u,
-                1u << 23,
-                1u << 26,
-                1u << 29,
-                (1u << 29) |
-                    (1u << 26)
-            });
-
-        testRandom();
-
-        std::cout
-            << "\nAll octree mass/CoM "
-            << "tests passed.\n";
-
-        return 0;
-    }
-    catch (const std::exception& error)
-    {
-        std::cerr
-            << "\n[FAIL] "
-            << error.what()
-            << '\n';
-
-        return 1;
-    }
+TEST_F(OctreePhysicsTest, ComputesSingleOccupiedCell)
+{
+    runCase("single occupied cell", {0u});
 }
 
-TEST(OctreeMassCenterOfMassCudaTest, CompleteSuite)
+TEST_F(OctreePhysicsTest, ComputesDuplicateParticlesInOneCell)
 {
-    EXPECT_EQ(runOctreeMassCenterOfMassTestSuite(), 0);
+    runCase(
+        "duplicate particles in one cell",
+        {7u, 7u, 7u, 7u});
+}
+
+TEST_F(OctreePhysicsTest, ComputesTwoLevelOneOctants)
+{
+    runCase(
+        "two level-one octants",
+        {0u, 1u << 29});
+}
+
+TEST_F(OctreePhysicsTest, ComputesSharedLevelOneCell)
+{
+    runCase(
+        "shared level-one cell",
+        {0u, 1u << 26});
+}
+
+TEST_F(OctreePhysicsTest, ComputesMixedOccupiedCells)
+{
+    runCase(
+        "mixed occupied cells",
+        {
+            0u,
+            1u << 23,
+            1u << 26,
+            1u << 29,
+            (1u << 29) | (1u << 26)
+        });
+}
+
+TEST_F(OctreePhysicsTest, ComputesDeterministicGeneratedInput)
+{
+    testRandom();
 }

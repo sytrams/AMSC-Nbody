@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "cuda_test.hpp"
 #include "morton_leaf_groups.hpp"
 #include "radix_to_octree.hpp"
 #include "tree_builder.hpp"
@@ -372,114 +373,55 @@ void testInvalidThirtyBitLayout()
 
 } // namespace
 
-int runRadixToOctreePlanTestSuite()
+class RadixToOctreeTest : public CudaTest
 {
-    try
-    {
-        int deviceCount = 0;
+};
 
-        checkCuda(
-            cudaGetDeviceCount(
-                &deviceCount),
-            "cudaGetDeviceCount");
-
-        require(
-            deviceCount > 0,
-            "No CUDA-capable GPU is available");
-
-        runExactCase(
-            "single occupied Morton cell",
-            {0u},
-            {10},
-            {10},
-            {0},
-            11);
-
-        runExactCase(
-            "two different level-one octants",
-            {
-                0u,
-                1u << 29
-            },
-            {
-                10,
-                10,
-                0
-            },
-            {
-                10,
-                10,
-                0
-            },
-            {
-                0,
-                10,
-                20
-            },
-            21);
-
-        runExactCase(
-            "two cells sharing level one",
-            {
-                0u,
-                1u << 26
-            },
-            {
-                10,
-                10,
-                1
-            },
-            {
-                9,
-                9,
-                1
-            },
-            {
-                0,
-                9,
-                18
-            },
-            20);
-
-        runExactCase(
-            "duplicate particles in one Morton cell",
-            {
-                7u,
-                7u,
-                7u,
-                7u
-            },
-            {
-                10
-            },
-            {
-                10
-            },
-            {
-                0
-            },
-            11);
-
-        testInvalidThirtyBitLayout();
-
-        std::cout
-            << "\nAll radix-to-octree planning "
-            << "tests passed.\n";
-
-        return 0;
-    }
-    catch (const std::exception& error)
-    {
-        std::cerr
-            << "\n[FAIL] "
-            << error.what()
-            << '\n';
-
-        return 1;
-    }
+TEST_F(RadixToOctreeTest, PlansSingleOccupiedMortonCell)
+{
+    runExactCase(
+        "single occupied Morton cell",
+        {0u},
+        {10},
+        {10},
+        {0},
+        11);
 }
 
-TEST(RadixToOctreePlanCudaTest, CompleteSuite)
+TEST_F(RadixToOctreeTest, PlansTwoLevelOneOctants)
 {
-    EXPECT_EQ(runRadixToOctreePlanTestSuite(), 0);
+    runExactCase(
+        "two different level-one octants",
+        {0u, 1u << 29},
+        {10, 10, 0},
+        {10, 10, 0},
+        {0, 10, 20},
+        21);
+}
+
+TEST_F(RadixToOctreeTest, PlansCellsSharingLevelOne)
+{
+    runExactCase(
+        "two cells sharing level one",
+        {0u, 1u << 26},
+        {10, 10, 1},
+        {9, 9, 1},
+        {0, 9, 18},
+        20);
+}
+
+TEST_F(RadixToOctreeTest, PlansDuplicateParticlesInOneCell)
+{
+    runExactCase(
+        "duplicate particles in one Morton cell",
+        {7u, 7u, 7u, 7u},
+        {10},
+        {10},
+        {0},
+        11);
+}
+
+TEST_F(RadixToOctreeTest, RejectsKeysOutsideThirtyBitLayout)
+{
+    testInvalidThirtyBitLayout();
 }

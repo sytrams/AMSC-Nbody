@@ -1,19 +1,36 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <filesystem>
 #include <fstream>
+#include <filesystem>
+#include <random>
 #include <stdexcept>
 #include <string>
 #include <vector>
 
-#include "particle.hpp"
+import particle;
 
-class MilkyWayTest : public ::testing::Test {
+namespace {
+
+std::filesystem::path makeTemporaryParticleFile()
+{
+    std::random_device randomDevice;
+    const auto token =
+        (static_cast<std::uint64_t>(randomDevice()) << 32) |
+        static_cast<std::uint64_t>(randomDevice());
+
+    return std::filesystem::temp_directory_path() /
+           ("nbody-particles-" + std::to_string(token) + ".bin");
+}
+
+} // namespace
+
+class ParticleFileTest : public ::testing::Test {
 protected:
-    const std::string test_file = "test_mw_tmp.bin";
+    const std::filesystem::path testFile =
+        makeTemporaryParticleFile();
 
-    void write_planar_file(bool use_64_bit_header) {
+    void writePlanarFile(bool use64BitHeader) {
         uint32_t num_particles = 2;
         uint64_t num_particles_64 = num_particles;
         std::vector<double> mass = {1.5e30, 2.5e30};
@@ -24,8 +41,13 @@ protected:
         std::vector<double> vy = {0.3, 0.4};
         std::vector<double> vz = {0.5, 0.6};
 
-        std::ofstream outFile(test_file, std::ios::binary);
-        if (use_64_bit_header) {
+        std::ofstream outFile(testFile, std::ios::binary);
+        if (!outFile) {
+            throw std::runtime_error(
+                "Could not create temporary particle file");
+        }
+
+        if (use64BitHeader) {
             outFile.write(reinterpret_cast<char*>(&num_particles_64), sizeof(uint64_t));
         } else {
             outFile.write(reinterpret_cast<char*>(&num_particles), sizeof(uint32_t));
@@ -40,18 +62,17 @@ protected:
     }
 
     void SetUp() override {
-        write_planar_file(false);
+        writePlanarFile(false);
     }
 
     void TearDown() override {
-        if (std::filesystem::exists(test_file)) {
-            std::filesystem::remove(test_file);
-        }
+        std::error_code error;
+        std::filesystem::remove(testFile, error);
     }
 };
 
-TEST_F(MilkyWayTest, LoadDataCorrectly) {
-    std::ifstream inFile(test_file, std::ios::binary);
+TEST_F(ParticleFileTest, LoadsPlanarFileWith32BitHeader) {
+    std::ifstream inFile(testFile, std::ios::binary);
     Particles mw(inFile);
 
     EXPECT_EQ(mw.num_particles, 2);
@@ -66,15 +87,17 @@ TEST_F(MilkyWayTest, LoadDataCorrectly) {
     EXPECT_DOUBLE_EQ(mw.vz[0], 0.5);
 }
 
-TEST_F(MilkyWayTest, ThrowsOnInvalidFile) {
-    std::ifstream inFile("non_existent_mw.bin", std::ios::binary);
+TEST_F(ParticleFileTest, RejectsUnreadableFile) {
+    auto missingFile = testFile;
+    missingFile += ".missing";
+    std::ifstream inFile(missingFile, std::ios::binary);
     EXPECT_THROW(Particles mw(inFile), std::runtime_error);
 }
 
-TEST_F(MilkyWayTest, LoadDataCorrectlyWithUInt64Header) {
-    write_planar_file(true);
+TEST_F(ParticleFileTest, LoadsPlanarFileWith64BitHeader) {
+    writePlanarFile(true);
 
-    std::ifstream inFile(test_file, std::ios::binary);
+    std::ifstream inFile(testFile, std::ios::binary);
     Particles mw(inFile);
 
     EXPECT_EQ(mw.num_particles, 2);

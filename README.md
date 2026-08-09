@@ -54,143 +54,110 @@ In our case, for an initial analysis, we began by studying the case in 2 dimensi
 
 </div>
 
-## NVIDIA CUDA implementation
+## particle.hpp
+This header file contains the principal implementation of the Verlet Integration that calculates and updates the values of the positions and velocities of the 2 bodies interacting with each other. It also defines the Particle class template and the fundamental particle we use to simulate the dynamics of a physical system.
 
-The active implementation targets NVIDIA hardware only. The former Makefile,
-Metal viewer, OpenMP build path, and C++ module build have been removed.
+## system.hpp
+This header file defines the gravitation_system class template, designed to simulate the dynamics of a system of N bodies (N-body problem) interacting with each other through the gravitational force, using the Verlet Integration algorithm and OpenMP parallelization.
 
-The CUDA implementation is split into the following components:
+## vector.hpp
+This header file defines the Vector class template, an elementary linear algebra library for representing and manipulating fixed-dimensional (DIM) vectors.
 
-- `gpu/cuda_kernels/globalbounding.cu` computes global spatial bounds with
-  Thrust.
-- `morton_leaf_groups`, `tree_builder`, and `radix_to_octree` build the radix
-  representation from Morton keys.
-- `octree_builder` materializes the sparse octree topology.
-- `octree_physics` computes octree mass and center-of-mass data.
-- `src/particle.cpp` contains the portable particle binary I/O used by the CPU
-  GoogleTest.
+## main.cpp
+The main file manages the execution flow of the N-body simulation. Its purpose is to initialize the system with the correct spatial dimension, run the simulation over the specified time interval, and store the results. The positions of all particles (bodies) are saved every 20 iterations in an output file, which can then be used to visualize their trajectories.
 
-The build currently produces the `nbody_cuda` and `nbody_particle` libraries
-plus their test executables. It does not produce the retired cross-platform
-simulation executable.
 
-## Build and test requirements
+## How to use it
+In order to compile the program you have to run the make command inside the project root:
+```
+make
+```
 
-For a native Linux build, install:
+Once the program is compiled, you can move into the build directory and run the executable file
+```
+cd build
+./nbody
+```
 
-- an NVIDIA driver and CUDA-capable GPU;
-- CUDA Toolkit with `nvcc`, CUDA Runtime, CUB, and Thrust;
-- CMake 3.28 or newer and a C++20 host compiler supported by the selected CUDA
-  Toolkit;
-- GoogleTest with its CMake package configuration;
-- Ninja when using the commands below.
+The program takes in some input arguments, which are visible with the command
+```
+./nbody -h
+```
+```
+./nbody --help
+```
 
-CUB and Thrust are supplied by the CUDA Toolkit. The current C++/CUDA sources
-do not require MPI, OpenMP, Boost, Eigen, Python, or a separately cloned CCCL
-repository.
+Alternatively, you can compile and run the program by only using the command
+```
+make run args = "[options]"
+```
+The default option to execute with simple ```make run``` command is ```-f ../src/solar_system.txt``` that give to the simulaton the initilizarion for our Solar System.
 
-Configure, compile, and run all GoogleTests with:
+## Tests
+
+Tests live under `tests/` and are divided into CPU/CUDA unit tests and
+CUDA integration tests. CMake builds the production libraries once and
+links the GoogleTest executables against them.
+
+Run the CPU tests on macOS:
 
 ```bash
-cmake -S . -B build -G Ninja \
+cmake -S . -B build/cpu-tests \
+  -G Ninja \
   -DBUILD_TESTING=ON \
-  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
-  -DCMAKE_CUDA_ARCHITECTURES=89
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
+  -DNBODY_ENABLE_CUDA=OFF \
+  -DNBODY_BUILD_VIEWER=OFF \
+  -DCMAKE_CXX_COMPILER=/opt/homebrew/opt/llvm@18/bin/clang++
+cmake --build build/cpu-tests --parallel
+ctest --test-dir build/cpu-tests --output-on-failure
 ```
 
-Architecture `89` targets the student cluster's NVIDIA L4 GPUs. Set
-`CMAKE_CUDA_ARCHITECTURES` to the
-compute capability of the cluster GPU, or to a semicolon-separated CMake list
-when one build must support several architectures.
-
-To add Compute Sanitizer memcheck cases to CTest:
+The equivalent convenience command is:
 
 ```bash
-cmake -S . -B build -G Ninja \
+make test
+```
+
+Run all CUDA tests on a Linux/WSL machine with the CUDA toolkit:
+
+```bash
+cmake -S . -B build/cuda-tests \
+  -G Ninja \
   -DBUILD_TESTING=ON \
-  -DNBODY_ENABLE_COMPUTE_SANITIZER_TESTS=ON \
-  -DCMAKE_CUDA_ARCHITECTURES=89
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
+  -DNBODY_ENABLE_CUDA=ON \
+  -DNBODY_BUILD_VIEWER=OFF
+cmake --build build/cuda-tests --parallel
+ctest --test-dir build/cuda-tests -L cuda --output-on-failure
 ```
 
-## Singularity/Apptainer test container
-
-`Singularity.def` defines only the test environment: CUDA 12.6.3, GCC, CMake,
-Ninja, and GoogleTest. It does not contain VPN, SSH, PBS authentication, or
-cluster credentials. The host NVIDIA driver is injected only at execution time
-with `--nv`.
-
-Build the immutable SIF image on a Linux system with Apptainer:
+Useful filters include:
 
 ```bash
-sudo apptainer build nbody-tests.sif Singularity.def
+ctest --test-dir build/cuda-tests -L unit --output-on-failure
+ctest --test-dir build/cuda-tests -L integration --output-on-failure
+ctest --test-dir build/cuda-tests -R TreeBuilder --output-on-failure
 ```
 
-The equivalent `singularity build` command can be used with SingularityCE.
-Image construction does not need a GPU; CUDA execution does.
-
-The student cluster uses OpenPBS. Enable its commands, create the results
-directory, and explicitly request the GPU queue, one GPU, and two CPU threads:
+Compute Sanitizer is intentionally separate from the fast test run:
 
 ```bash
-. /etc/profile.d/pbs.sh
-mkdir -p ci-results
-qsub \
-  -q gpu \
-  -l select=1:ncpus=2:ngpus=1 \
-  -l walltime=00:30:00 \
-  -v SOURCE_DIR="$PWD",IMAGE_PATH="$PWD/nbody-tests.sif",RESULTS_DIR="$PWD/ci-results",CONTAINER_RUNTIME=apptainer,CUDA_ARCHITECTURES=89,BUILD_JOBS=2 \
-  ci/run_gpu_tests.pbs
+tests/scripts/run_cuda_sanitizers.sh
+RUN_RACECHECK=1 tests/scripts/run_cuda_sanitizers.sh
 ```
 
-Monitor the returned job ID with `qstat -f JOB_ID`. The batch script mounts the
-source read-only at
-`/workspace`, builds in node-local temporary storage, runs every GoogleTest via
-CTest, and writes `ctest-results.xml`, configure/build/test logs, the PBS output,
-and an exit-code marker under `ci-results`.
+The macOS Metal viewer is a separate executable and never opens as a
+side effect of running tests:
 
-## Automated cluster deployment
-
-`.github/workflows/main.yml` owns the connection and deployment sequence:
-
-1. build `nbody-tests.sif` on the GitHub Linux runner;
-2. establish the GlobalProtect VPN and SSH connection;
-3. transfer the tracked source archive and SIF image to a commit-specific
-   cluster directory;
-4. load the PBS commands, submit `ci/run_gpu_tests.pbs` to the `gpu` queue with
-   `select=1:ncpus=2:ngpus=1`, and wait for its exit status;
-5. download the JUnit report and logs as a GitHub Actions artifact;
-6. disconnect the VPN in an `always()` cleanup step.
-
-Configure these GitHub Actions secrets:
-
-- `POLIMI_USER`, `POLIMI_PASSWORD`, `POLIMI_TOTP`, and `POLIMI_VPN` for the VPN;
-- `SSH_PRIVATE_KEY`, `SSH_CERTIFICATE`, and `SSH_KNOWN_HOSTS` for host
-  verification and SSH authentication;
-- `SSH_USER` and `CLUSTER_IP_ADDRESS` for the remote login target.
-
-Configure these repository variables as required by the target cluster:
-
-| Variable | Required | Default | Purpose |
-| --- | --- | --- | --- |
-| `PBS_QUEUE` | No | `gpu` | OpenPBS queue containing the multi-GPU nodes |
-| `PBS_NCPUS` | No | `2` | CPU threads requested alongside one GPU |
-| `PBS_WALLTIME` | No | `00:30:00` | Maximum PBS job duration in `HH:MM:SS` format |
-| `CUDA_ARCHITECTURES` | No | `89` | CMake CUDA architecture for the NVIDIA L4 |
-| `CLUSTER_PROJECT_ROOT` | No | `AMSC-Nbody-ci` | Remote directory containing commit-specific releases |
-| `CLUSTER_CONTAINER_RUNTIME` | No | `apptainer` | `apptainer` or `singularity` executable on compute nodes |
-| `CLUSTER_CONTAINER_MODULE` | No | empty | Environment module to load when the runtime is not already available |
-| `ENABLE_COMPUTE_SANITIZER` | No | `OFF` | Set to `ON` to register and execute memcheck tests |
-
-The defaults match the student cluster guide: OpenPBS `gpu` queue, one shared
-NVIDIA L4 GPU, two requested CPU threads, compute capability 8.9, and the
-locally installed `apptainer` runtime.
+```bash
+cmake -S . -B build/viewer -G Ninja \
+  -DBUILD_TESTING=OFF \
+  -DNBODY_BUILD_VIEWER=ON
+cmake --build build/viewer --target nbody_viewer
+./build/viewer/nbody_viewer -f data/test_spiral.bin
+```
 
 ## Generate Galaxy Data
-The script [data/generate_galaxy.py](data/generate_galaxy.py) creates synthetic binary datasets for the galaxy viewer and the large-particle loader.
+The script [data/generate_galaxy.py](/Users/wedoi/Documents/AMSC-nbody/AMSC-Nbody/data/generate_galaxy.py:1) creates synthetic binary datasets for the galaxy viewer and the large-particle loader.
 
 Run it from the project root with:
 ```bash
@@ -225,6 +192,18 @@ Binary format:
 Each coordinate and velocity component is written as little-endian ```double```.
 
 Use a writable output path such as ```data/file.bin```. A path like ```/data/file.bin``` points to a root-level directory and will usually fail with a permission error.
+
+## External tool
+We have and external script writing in python to export an image of the plot about our simulation.
+
+In order to run it you have to execute
+```
+python3 plt_trajectory.py
+```
+from the ```src``` directory
+
+The image can be seen as ```/build/trajectory.png```
+
 
 # The general issue we had
 In our initial study with the Euler method we found a problem when representing the trajectories as they did not seem to be precise and to respect the correct progression of the planets.

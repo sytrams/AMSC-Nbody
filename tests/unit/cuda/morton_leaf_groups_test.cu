@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include "cuda_test.hpp"
 #include "morton_leaf_groups.hpp"
 
 namespace 
@@ -333,74 +334,56 @@ namespace
     }
 } // namespace
 
-int runMortonLeafGroupsTestSuite()
+class MortonLeafGroupsTest : public CudaTest
 {
-    try
-    {
-        runCase(
-            "single key",
-            {42u},
-            {42u},
-            {0},
-            {1});
+};
 
-        runCase(
-            "all unique keys",
-            {2u, 5u, 8u, 10u},
-            {2u, 5u, 8u, 10u},
-            {0, 1, 2, 3},
-            {1, 1, 1, 1});
-
-        runCase(
-            "all duplicate keys",
-            {7u, 7u, 7u, 7u},
-            {7u},
-            {0},
-            {4});
-
-        runCase(
-            "mixed key groups",
-            {1u, 1u, 2u, 4u, 4u, 4u, 9u},
-            {1u, 2u, 4u, 9u},
-            {0, 2, 3, 6},
-            {2, 1, 3, 1});
-
-        runCase(
-            "minimum and maximum keys",
-            {
-                0u,
-                0u,
-                1u,
-                0xFFFFFFFFu,
-                0xFFFFFFFFu
-            },
-            {
-                0u,
-                1u,
-                0xFFFFFFFFu
-            },
-            {0, 2, 3},
-            {2, 1, 2});
-        
-        testCapacityValidation();
-
-        std::cout
-            << "\nAll Morton leaf-group tests passed.\n";
-
-        return 0;
-    }
-    catch (const std::exception& error)
-    {
-        std::cerr
-            << "[FAIL] "
-            << error.what()
-            << '\n';
-
-        return 1;
-    }
+TEST_F(MortonLeafGroupsTest, GroupsSingleKey)
+{
+    runCase("single key", {42u}, {42u}, {0}, {1});
 }
 
-TEST(MortonLeafGroupsCudaTest, CompleteSuite)
+TEST_F(MortonLeafGroupsTest, PreservesAllUniqueKeys)
 {
-    EXPECT_EQ(runMortonLeafGroupsTestSuite(), 0);
+    runCase(
+        "all unique keys",
+        {2u, 5u, 8u, 10u},
+        {2u, 5u, 8u, 10u},
+        {0, 1, 2, 3},
+        {1, 1, 1, 1});
+}
+
+TEST_F(MortonLeafGroupsTest, CombinesDuplicateKeys)
+{
+    runCase(
+        "all duplicate keys",
+        {7u, 7u, 7u, 7u},
+        {7u},
+        {0},
+        {4});
+}
+
+TEST_F(MortonLeafGroupsTest, GroupsMixedKeys)
+{
+    runCase(
+        "mixed key groups",
+        {1u, 1u, 2u, 4u, 4u, 4u, 9u},
+        {1u, 2u, 4u, 9u},
+        {0, 2, 3, 6},
+        {2, 1, 3, 1});
+}
+
+TEST_F(MortonLeafGroupsTest, HandlesMinimumAndMaximumKeys)
+{
+    runCase(
+        "minimum and maximum keys",
+        {0u, 0u, 1u, 0xFFFFFFFFu, 0xFFFFFFFFu},
+        {0u, 1u, 0xFFFFFFFFu},
+        {0, 2, 3},
+        {2, 1, 2});
+}
+
+TEST_F(MortonLeafGroupsTest, RejectsInputLargerThanCapacity)
+{
+    testCapacityValidation();
 }
