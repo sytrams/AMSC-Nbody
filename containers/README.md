@@ -3,7 +3,7 @@
 This Apptainer/Singularity image provides the Linux toolchain required by the
 AMSC N-body CMake test targets:
 
-- CUDA 12.8 development toolkit and Compute Sanitizer;
+- the minimal CUDA 12.8 compiler/runtime packages and Compute Sanitizer;
 - Clang 18 for the C++23 `particle` module;
 - CMake, Ninja, and the system GoogleTest package.
 

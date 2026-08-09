@@ -281,6 +281,36 @@ jobs:
 
           release_dir=""
           for candidate in "${candidates[@]}"; do
+            releases_root="${candidate%/}/releases"
+            if [[ -d "$releases_root" ]]; then
+              shopt -s nullglob
+              for stale_release in "$releases_root"/*; do
+                [[ -d "$stale_release" ]] || continue
+                [[ -e "$stale_release/.deployment-complete" ]] && continue
+
+                stale_artifacts=(
+                  "$stale_release/source.tar.gz"
+                  "$stale_release/nbody-tests.sif"
+                  "$stale_release"/.nbody-tests-*.sif.part
+                )
+                reclaimed_bytes=0
+                for stale_artifact in "${stale_artifacts[@]}"; do
+                  [[ -f "$stale_artifact" ]] || continue
+                  artifact_bytes="$(stat --format=%s "$stale_artifact" 2>/dev/null || echo 0)"
+                  rm -f -- "$stale_artifact"
+                  reclaimed_bytes=$((reclaimed_bytes + artifact_bytes))
+                done
+
+                if (( reclaimed_bytes > 0 )); then
+                  printf 'Removed %s bytes of incomplete automation artifacts from %s\n' \
+                    "$reclaimed_bytes" \
+                    "$stale_release" >&2
+                fi
+                rmdir "$stale_release" 2>/dev/null || true
+              done
+              shopt -u nullglob
+            fi
+
             candidate_release="${candidate%/}/releases/$commit_sha"
             if ! mkdir -p "$candidate_release" 2>/dev/null; then
               printf 'Cluster storage is not writable: %s\n' "$candidate" >&2
@@ -328,7 +358,7 @@ jobs:
             "$IMAGE_PATH" \
             "$target:$remote_image"
           ssh "${ssh_options[@]}" "$target" \
-            "mv '$remote_image' '$release_dir/nbody-tests.sif' && tar -xzf '$remote_archive' -C '$release_dir'"
+            "mv '$remote_image' '$release_dir/nbody-tests.sif' && tar -xzf '$remote_archive' -C '$release_dir' && touch '$release_dir/.deployment-complete'"
 
           trap - ERR INT TERM
 
