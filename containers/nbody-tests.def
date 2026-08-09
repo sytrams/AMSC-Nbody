@@ -34,6 +34,7 @@ From: nvidia/cuda:12.8.1-base-ubuntu24.04
         cuda-nvcc-12-8 \
         cuda-sanitizer-12-8 \
         git \
+        libc6-dev \
         libgtest-dev \
         ninja-build
     rm -rf /var/lib/apt/lists/*
@@ -60,4 +61,12 @@ From: nvidia/cuda:12.8.1-base-ubuntu24.04
     command -v ninja
     command -v clang++-18
     command -v nvcc
+    test -f /usr/include/pthread.h
+    printf '%s\n' \
+        '#include <pthread.h>' \
+        'int main() { pthread_t thread{}; return pthread_create(&thread, nullptr, nullptr, nullptr); }' \
+        > /tmp/nbody-pthread-smoke.cpp
+    clang++-18 -std=c++23 -pthread \
+        /tmp/nbody-pthread-smoke.cpp \
+        -o /tmp/nbody-pthread-smoke
     find /usr/lib -path '*/cmake/GTest/GTestConfig.cmake' -print -quit | grep -q .

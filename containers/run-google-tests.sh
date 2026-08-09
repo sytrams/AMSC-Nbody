@@ -14,6 +14,7 @@ Environment variables:
   NBODY_BUILD_TYPE          CMake build type (default: RelWithDebInfo)
   NBODY_CUDA_ARCHITECTURES  CMake CUDA architectures (default: native)
   NBODY_JOBS                Parallel build jobs (default: SLURM_CPUS_PER_TASK or nproc)
+  NBODY_RESULTS_DIR         Directory for configure diagnostics on failure
   NBODY_CMAKE_ARGS          Additional whitespace-separated CMake arguments
   NBODY_CTEST_ARGS          Additional whitespace-separated CTest arguments
 EOF
@@ -57,6 +58,29 @@ fi
 
 build_dir="${NBODY_BUILD_DIR:-${source_dir}/build/cluster-${mode}}"
 build_type="${NBODY_BUILD_TYPE:-RelWithDebInfo}"
+results_dir="${NBODY_RESULTS_DIR:-}"
+
+collect_configure_diagnostics() {
+    local status=$?
+    trap - ERR
+    set +e
+
+    if [[ -n "${results_dir}" ]]; then
+        mkdir -p "${results_dir}"
+        for diagnostic in \
+            "${build_dir}/CMakeCache.txt" \
+            "${build_dir}/CMakeFiles/CMakeConfigureLog.yaml" \
+            "${build_dir}/CMakeFiles/CMakeError.log" \
+            "${build_dir}/CMakeFiles/CMakeOutput.log"; do
+            if [[ -f "${diagnostic}" ]]; then
+                cp "${diagnostic}" "${results_dir}/"
+            fi
+        done
+    fi
+
+    exit "${status}"
+}
+trap collect_configure_diagnostics ERR
 
 if [[ -n "${NBODY_JOBS:-}" ]]; then
     jobs="${NBODY_JOBS}"

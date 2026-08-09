@@ -51,7 +51,11 @@ record_exit_status() {
 trap record_exit_status EXIT
 
 printf 'OpenPBS job: %s\n' "${PBS_JOBID:-manual}"
-printf 'GPU node: %s\n' "$(hostname)"
+hostname | tee "${results_dir}/compute-node.txt"
+nvidia-smi \
+    --query-gpu=name,compute_cap \
+    --format=csv,noheader \
+    | tee "${results_dir}/gpu-inventory.txt"
 
 "${runtime}" run \
     --nv \
@@ -61,6 +65,7 @@ printf 'GPU node: %s\n' "$(hostname)"
     --bind "${results_dir}:/results" \
     --env NBODY_JOBS="${jobs}" \
     --env NBODY_BUILD_DIR=/build \
+    --env NBODY_RESULTS_DIR=/results \
     --env NBODY_CUDA_ARCHITECTURES="${NBODY_CUDA_ARCHITECTURES:-native}" \
     --env "NBODY_CTEST_ARGS=--parallel 1 --output-junit /results/ctest-results.xml" \
     "${image}" \
