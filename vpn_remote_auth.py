@@ -11,7 +11,7 @@ import signal
 import subprocess
 import sys
 from threading import Event, Thread
-from time import monotonic
+from time import monotonic, time
 from typing import TextIO
 from urllib.parse import urlsplit
 
@@ -31,6 +31,7 @@ AUTH_TIMEOUT_SECONDS = 60
 AUTH_URL_TIMEOUT_SECONDS = 30
 VPN_READY_TIMEOUT_SECONDS = 180
 PROCESS_STOP_TIMEOUT_SECONDS = 15
+VPN_CONNECT_ATTEMPTS = 2
 POLL_INTERVAL_MS = 250
 PROCESS_STARTED_AT = monotonic()
 
@@ -77,6 +78,22 @@ ERROR_SELECTOR = (
 
 class ShutdownRequested(Exception):
     """Raised when the workflow asks the background VPN process to stop."""
+
+
+def is_retryable_gpclient_failure(exc: Exception) -> bool:
+    message = str(exc)
+    return any(
+        marker in message
+        for marker in (
+            "gpclient exited before VPN readiness",
+            "gpclient output ended before VPN readiness",
+        )
+    )
+
+
+def fresh_otp_delay_seconds() -> int:
+    interval = pyotp.TOTP(required_secret("POLIMI_TOTP")).interval
+    return interval - (int(time()) % interval) + 1
 
 
 @dataclass
@@ -1005,8 +1022,8 @@ def start_vpn(
 
 
 def main() -> int:
-    diagnostics = VpnDiagnostics(required_directory("VPN_DIAGNOSTICS_DIR"))
-    prepare_diagnostics(diagnostics)
+    diagnostics_directory = required_directory("VPN_DIAGNOSTICS_DIR")
+    diagnostics = VpnDiagnostics(diagnostics_directory)
     ready_file = required_status_path("VPN_READY_FILE")
     failed_file = required_status_path("VPN_FAILED_FILE")
     remove_status_file(ready_file)
@@ -1016,7 +1033,31 @@ def main() -> int:
     install_shutdown_handlers(shutdown_event)
 
     try:
-        return start_vpn(ready_file, shutdown_event, diagnostics)
+        for attempt in range(1, VPN_CONNECT_ATTEMPTS + 1):
+            diagnostics = VpnDiagnostics(diagnostics_directory)
+            prepare_diagnostics(diagnostics)
+            try:
+                return start_vpn(ready_file, shutdown_event, diagnostics)
+            except ShutdownRequested:
+                raise
+            except Exception as exc:
+                if (
+                    attempt >= VPN_CONNECT_ATTEMPTS
+                    or not is_retryable_gpclient_failure(exc)
+                ):
+                    raise
+
+                delay = fresh_otp_delay_seconds()
+                log_event(
+                    "retry",
+                    f"gpclient stopped during setup; retrying connection "
+                    f"after {delay}s with a fresh OTP "
+                    f"(attempt {attempt + 1}/{VPN_CONNECT_ATTEMPTS})",
+                )
+                if shutdown_event.wait(delay):
+                    raise ShutdownRequested
+
+        raise AssertionError("VPN connection attempt loop ended unexpectedly")
     except ShutdownRequested:
         log_event("lifecycle", "shutdown completed before VPN readiness")
         return 0

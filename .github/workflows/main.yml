@@ -185,7 +185,7 @@ jobs:
         id: vpn_wait
         shell: bash
         run: |
-          for attempt in {1..180}; do
+          for attempt in {1..420}; do
             if test -f "$RUNNER_TEMP/vpn-ready"; then
               exit 0
             fi
