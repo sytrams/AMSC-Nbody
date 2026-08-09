@@ -54,47 +54,141 @@ In our case, for an initial analysis, we began by studying the case in 2 dimensi
 
 </div>
 
-## particle.hpp
-This header file contains the principal implementation of the Verlet Integration that calculates and updates the values of the positions and velocities of the 2 bodies interacting with each other. It also defines the Particle class template and the fundamental particle we use to simulate the dynamics of a physical system.
+## NVIDIA CUDA implementation
 
-## system.hpp
-This header file defines the gravitation_system class template, designed to simulate the dynamics of a system of N bodies (N-body problem) interacting with each other through the gravitational force, using the Verlet Integration algorithm and OpenMP parallelization.
+The active implementation targets NVIDIA hardware only. The former Makefile,
+Metal viewer, OpenMP build path, and C++ module build have been removed.
 
-## vector.hpp
-This header file defines the Vector class template, an elementary linear algebra library for representing and manipulating fixed-dimensional (DIM) vectors.
+The CUDA implementation is split into the following components:
 
-## main.cpp
-The main file manages the execution flow of the N-body simulation. Its purpose is to initialize the system with the correct spatial dimension, run the simulation over the specified time interval, and store the results. The positions of all particles (bodies) are saved every 20 iterations in an output file, which can then be used to visualize their trajectories.
+- `gpu/cuda_kernels/globalbounding.cu` computes global spatial bounds with
+  Thrust.
+- `morton_leaf_groups`, `tree_builder`, and `radix_to_octree` build the radix
+  representation from Morton keys.
+- `octree_builder` materializes the sparse octree topology.
+- `octree_physics` computes octree mass and center-of-mass data.
+- `src/particle.cpp` contains the portable particle binary I/O used by the CPU
+  GoogleTest.
 
+The build currently produces the `nbody_cuda` and `nbody_particle` libraries
+plus their test executables. It does not produce the retired cross-platform
+simulation executable.
 
-## How to use it
-In order to compile the program you have to run the make command inside the project root:
-```
-make
+## Build and test requirements
+
+For a native Linux build, install:
+
+- an NVIDIA driver and CUDA-capable GPU;
+- CUDA Toolkit with `nvcc`, CUDA Runtime, CUB, and Thrust;
+- CMake 3.28 or newer and a C++20 host compiler supported by the selected CUDA
+  Toolkit;
+- GoogleTest with its CMake package configuration;
+- Ninja when using the commands below.
+
+CUB and Thrust are supplied by the CUDA Toolkit. The current C++/CUDA sources
+do not require MPI, OpenMP, Boost, Eigen, Python, or a separately cloned CCCL
+repository.
+
+Configure, compile, and run all GoogleTests with:
+
+```bash
+cmake -S . -B build -G Ninja \
+  -DBUILD_TESTING=ON \
+  -DCMAKE_BUILD_TYPE=RelWithDebInfo \
+  -DCMAKE_CUDA_ARCHITECTURES=80
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-Once the program is compiled, you can move into the build directory and run the executable file
-```
-cd build
-./nbody
+Architecture `80` targets NVIDIA A100. Set `CMAKE_CUDA_ARCHITECTURES` to the
+compute capability of the cluster GPU, or to a semicolon-separated CMake list
+when one build must support several architectures.
+
+To add Compute Sanitizer memcheck cases to CTest:
+
+```bash
+cmake -S . -B build -G Ninja \
+  -DBUILD_TESTING=ON \
+  -DNBODY_ENABLE_COMPUTE_SANITIZER_TESTS=ON \
+  -DCMAKE_CUDA_ARCHITECTURES=80
+cmake --build build --parallel
+ctest --test-dir build --output-on-failure
 ```
 
-The program takes in some input arguments, which are visible with the command
-```
-./nbody -h
-```
-```
-./nbody --help
+## Singularity/Apptainer test container
+
+`Singularity.def` defines only the test environment: CUDA 12.6.3, GCC, CMake,
+Ninja, and GoogleTest. It does not contain VPN, SSH, Slurm authentication, or
+cluster credentials. The host NVIDIA driver is injected only at execution time
+with `--nv`.
+
+Build the immutable SIF image on a Linux system with Apptainer:
+
+```bash
+sudo apptainer build nbody-tests.sif Singularity.def
 ```
 
-Alternatively, you can compile and run the program by only using the command
+The equivalent `singularity build` command can be used with SingularityCE.
+Image construction does not need a GPU; CUDA execution does.
+
+For a manual Slurm submission, first ensure `ci-results` exists because Slurm
+opens the output file before starting the script:
+
+```bash
+mkdir -p ci-results
+sbatch --wait \
+  --partition=GPU_PARTITION \
+  --account=PROJECT_ACCOUNT \
+  --export=ALL,SOURCE_DIR="$PWD",IMAGE_PATH="$PWD/nbody-tests.sif",RESULTS_DIR="$PWD/ci-results",CONTAINER_RUNTIME=singularity,CUDA_ARCHITECTURES=80 \
+  ci/run_gpu_tests.slurm
 ```
-make run args = "[options]"
-```
-The default option to execute with simple ```make run``` command is ```-f ../src/solar_system.txt``` that give to the simulaton the initilizarion for our Solar System.
+
+The batch script requests one NVIDIA GPU, mounts the source read-only at
+`/workspace`, builds in node-local temporary storage, runs every GoogleTest via
+CTest, and writes `ctest-results.xml`, configure/build/test logs, and the Slurm
+output under `ci-results`.
+
+## Automated cluster deployment
+
+`.github/workflows/main.yml` owns the connection and deployment sequence:
+
+1. build `nbody-tests.sif` on the GitHub Linux runner;
+2. establish the GlobalProtect VPN and SSH connection;
+3. transfer the tracked source archive and SIF image to a commit-specific
+   cluster directory;
+4. submit `ci/run_gpu_tests.slurm` and wait for its exit status;
+5. download the JUnit report and logs as a GitHub Actions artifact;
+6. disconnect the VPN in an `always()` cleanup step.
+
+Configure these GitHub Actions secrets:
+
+- `POLIMI_USER`, `POLIMI_PASSWORD`, `POLIMI_TOTP`, and `POLIMI_VPN` for the VPN;
+- `SSH_PRIVATE_KEY`, `SSH_CERTIFICATE`, and `SSH_KNOWN_HOSTS` for host
+  verification and SSH authentication;
+- `SSH_USER` and `CLUSTER_IP_ADDRESS` for the remote login target.
+
+Configure these repository variables as required by the target cluster:
+
+| Variable | Required | Default | Purpose |
+| --- | --- | --- | --- |
+| `SLURM_PARTITION` | Yes on most clusters | empty | GPU-enabled Slurm partition, for example Leonardo `boost_usr_prod` |
+| `SLURM_ACCOUNT` | Cluster-dependent | empty | Project allocation/account passed to `sbatch` |
+| `SLURM_QOS` | Cluster-dependent | empty | Optional Slurm QOS |
+| `CUDA_ARCHITECTURES` | No | `80` | CMake CUDA architecture; use `90` for H100 |
+| `CLUSTER_PROJECT_ROOT` | No | `AMSC-Nbody-ci` | Remote directory containing commit-specific releases |
+| `CLUSTER_CONTAINER_RUNTIME` | No | `singularity` | `singularity` or `apptainer` executable on compute nodes |
+| `CLUSTER_CONTAINER_MODULE` | No | empty | Environment module to load when the runtime is not already available |
+| `ENABLE_COMPUTE_SANITIZER` | No | `OFF` | Set to `ON` to register and execute memcheck tests |
+
+For CINECA Leonardo, the defaults `CUDA_ARCHITECTURES=80` and
+`CLUSTER_CONTAINER_RUNTIME=singularity` match its A100 nodes and Singularity
+runtime; set the project-specific Slurm account and a GPU partition. Refer to
+the current [CINECA container documentation](https://docs.hpc.cineca.it/services/singularity.html)
+and [Leonardo partition documentation](https://docs.hpc.cineca.it/hpc/leonardo.html)
+when choosing site values.
 
 ## Generate Galaxy Data
-The script [data/generate_galaxy.py](/Users/wedoi/Documents/AMSC-nbody/AMSC-Nbody/data/generate_galaxy.py:1) creates synthetic binary datasets for the galaxy viewer and the large-particle loader.
+The script [data/generate_galaxy.py](data/generate_galaxy.py) creates synthetic binary datasets for the galaxy viewer and the large-particle loader.
 
 Run it from the project root with:
 ```bash
@@ -130,18 +224,6 @@ Each coordinate and velocity component is written as little-endian ```double```.
 
 Use a writable output path such as ```data/file.bin```. A path like ```/data/file.bin``` points to a root-level directory and will usually fail with a permission error.
 
-## External tool
-We have and external script writing in python to export an image of the plot about our simulation.
-
-In order to run it you have to execute 
-```
-python3 plt_trajectory.py
-```
-from the ```src``` directory
-
-The image can be seen as ```/build/trajectory.png```
-
-
 # The general issue we had
 In our initial study with the Euler method we found a problem when representing the trajectories as they did not seem to be precise and to respect the correct progression of the planets.
 For this reason we decided to adopt and study our case by applying the Verlet integration, which is a numerical method used to integrate Newton's equations of motion.
@@ -152,5 +234,3 @@ The Verlet method, thanks to its time-symmetric structure, is much more stable, 
 •	Euler: local error of order 1 → global error O(Δt)
 
 •	Verlet: local error of order 2 → global error O(Δt²)
-
-
