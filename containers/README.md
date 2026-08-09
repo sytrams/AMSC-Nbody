@@ -82,3 +82,23 @@ NBODY_SOURCE_DIR=/path/to/AMSC-Nbody \
 
 Do not request a GPU for CPU-only jobs. In that case, run the image without
 `--nv`, or copy the batch script and remove `--gres=gpu:1` and `--nv`.
+
+## GitHub Actions deployment
+
+`.github/workflows/main.yml` builds the SIF on the GitHub runner, packages the
+tracked source at the triggering commit, connects to the cluster over the
+PoliMi VPN, and deploys both files to a commit-specific release directory. It
+then submits `slurm-google-tests.sbatch`, waits for all CPU and CUDA GoogleTests,
+and uploads the test log, JUnit XML, Slurm exit code, and scheduler output.
+
+The workflow uses the existing VPN and SSH secrets. Cluster-specific settings
+can be supplied as GitHub Actions repository variables:
+
+- `CLUSTER_PROJECT_ROOT` (default `AMSC-Nbody-ci`)
+- `CLUSTER_CONTAINER_RUNTIME` (default `apptainer`)
+- `CLUSTER_CONTAINER_MODULE` (optional)
+- `CUDA_ARCHITECTURES` (default `80`)
+- `SLURM_PARTITION`, `SLURM_ACCOUNT`, and `SLURM_QOS` (optional)
+- `SLURM_CPUS_PER_TASK` (default `8`)
+- `SLURM_MEMORY` (default `16G`)
+- `SLURM_WALLTIME` (default `00:30:00`)
