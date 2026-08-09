@@ -339,7 +339,13 @@ jobs:
           results_dir="$release_dir/ci-results/$run_key"
           mkdir -p "$results_dir"
 
+          # Cluster profile scripts are written for interactive/login shells and
+          # may reference optional variables (for example MANPATH) that are not
+          # initialized in this non-interactive SSH session. Temporarily disable
+          # nounset while loading PBS, then restore strict mode immediately.
+          set +u
           . /etc/profile.d/pbs.sh
+          set -u
           command -v qsub
           command -v qstat
           command -v qdel
