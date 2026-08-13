@@ -1,11 +1,19 @@
 #pragma once
-#include <cstddef>
-#include <memory>
+
+#include <array>
 
 
-struct minmax{
-    std::unique_ptr<double[]> min;
-    std::unique_ptr<double[]> max;
-};
+class Bbox{
+    private:
+    float x, y, z;
+    float box_size_;
+    
 
-void gpu_compute_boundaries(const std::unique_ptr<double[]>& x, const std::unique_ptr<double[]>& y, const std::unique_ptr<double[]>& z, const int N, minmax* results);
+    public:
+    Bbox():
+        box_size_(-1), x(0.0f), y(0.0f), z(0.0f)
+    {}
+
+    Bbox()
+}
+

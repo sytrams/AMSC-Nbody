@@ -1,11 +1,7 @@
-module;
+#pragma once
 
 #include <iostream>
 #define DIM 3
-
-export module Morton;
-
-import particle;
 
 export class MortonKeys{
     public:
