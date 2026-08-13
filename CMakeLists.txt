@@ -4,8 +4,9 @@
 # repository root; each workflow gets its own build directory so their cached
 # options do not interfere with one another.
 #
-# CPU tests (requires a C++23 compiler and, unless GTest is installed, network
-# access during the first configure so FetchContent can download GoogleTest):
+# CPU tests (requires a C++23 compiler, Thrust from the bundled CCCL tree or a
+# CUDA toolkit, and unless GTest is installed, network access during the first
+# configure so FetchContent can download GoogleTest):
 #   cmake -S . -B build/cpu-tests -DBUILD_TESTING=ON \
 #     -DNBODY_ENABLE_CUDA=OFF -DNBODY_BUILD_VIEWER=OFF
 #   cmake --build build/cpu-tests --parallel
@@ -67,6 +68,30 @@ option(
 # The particle loader is header-only. nbody::particle gives consumers a stable,
 # namespaced target and carries the project/Thrust include paths with it.
 if(BUILD_TESTING)
+    # Prefer the bundled CCCL package when it is present. Minimal server copies
+    # may omit external/cccl, so fall back to the Thrust package belonging to
+    # the CUDA toolkit selected by nvcc without enabling the CUDA language.
+    set(
+        nbody_bundled_thrust_dir
+        "${PROJECT_SOURCE_DIR}/external/cccl/lib/cmake/thrust")
+    if(EXISTS "${nbody_bundled_thrust_dir}/thrust-config.cmake")
+        set(nbody_thrust_hints "${nbody_bundled_thrust_dir}")
+    else()
+        find_package(CUDAToolkit REQUIRED)
+        file(
+            GLOB nbody_toolkit_thrust_hints
+            LIST_DIRECTORIES TRUE
+            "${CUDAToolkit_LIBRARY_ROOT}/targets/*/lib/cmake/thrust")
+        set(
+            nbody_thrust_hints
+            "${CUDAToolkit_TARGET_DIR}/lib/cmake/thrust"
+            "${CUDAToolkit_LIBRARY_ROOT}/lib/cmake/thrust"
+            ${nbody_toolkit_thrust_hints})
+    endif()
+
+    find_package(Thrust REQUIRED CONFIG HINTS ${nbody_thrust_hints})
+    thrust_create_target(nbody_thrust_cpp HOST CPP DEVICE CPP)
+
     add_library(nbody_particle INTERFACE)
     add_library(nbody::particle ALIAS nbody_particle)
     target_sources(
@@ -78,9 +103,8 @@ if(BUILD_TESTING)
     target_include_directories(
         nbody_particle
         INTERFACE
-            ${PROJECT_SOURCE_DIR}
-            ${PROJECT_SOURCE_DIR}/external/cccl/libcudacxx/include
-            ${PROJECT_SOURCE_DIR}/external/cccl/thrust)
+            ${PROJECT_SOURCE_DIR})
+    target_link_libraries(nbody_particle INTERFACE nbody_thrust_cpp)
     target_compile_features(nbody_particle INTERFACE cxx_std_23)
 endif()
 

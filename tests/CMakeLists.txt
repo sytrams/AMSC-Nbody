@@ -26,11 +26,8 @@ target_link_libraries(
     PRIVATE
         nbody::particle
         GTest::gtest_main)
-# Exercise the loader on machines without a CUDA toolkit as well. The tests use
-# Thrust's portable C++ device backend while retaining the device-vector API.
-target_compile_definitions(
-    nbody_cpu_unit_tests
-    PRIVATE THRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CPP)
+# nbody::particle supplies Thrust's portable C++ host/device backend and the
+# include paths for either the bundled or active-toolkit CCCL package.
 # PRE_TEST delays discovery until CTest runs. This is friendlier to cross builds
 # because CMake does not need to execute the new binary during the build step.
 # The prefix and label make CPU cases easy to select with -R and -L.
