@@ -1,19 +1,33 @@
 #pragma once
 
-#include <array>
+#include <cstddef>
 
+#include <thrust/device_vector.h>
 
-class Bbox{
-    private:
-    float x, y, z;
-    float box_size_;
-    
+class Particles;
 
-    public:
-    Bbox():
-        box_size_(-1), x(0.0f), y(0.0f), z(0.0f)
-    {}
+struct BboxValues {
+  double center_x;
+  double center_y;
+  double center_z;
+  double side;
+};
 
-    Bbox()
-}
+class Bbox {
+public:
+  static constexpr std::size_t value_count = 4;
 
+  Bbox();
+  explicit Bbox(Particles &bodies);
+
+  void recompute(Particles &bodies);
+
+  [[nodiscard]] BboxValues values() const;
+  [[nodiscard]] const double *device_data() const noexcept;
+  [[nodiscard]] double *device_data() noexcept;
+
+private:
+  thrust::device_vector<double> centre_and_side_;
+
+  void compute_box(Particles &bodies);
+};
