@@ -1,17 +1,17 @@
 #pragma once
 
 #include <iostream>
+#include "include/globalbounding.hpp"
+
 #define DIM 3
 
-export class MortonKeys{
-    public:
+class MortonKeys{
+    private:
     uint32_t* keys;
     int* indices;
-    MortonKeys(){
+
+    public:
+    MortonKeys(double* x, double* y, double* z){
         
     }
 };
-
-friend minmax* GlobalBounding(std::unique_ptr<Prticles> bodies){
-    
-}

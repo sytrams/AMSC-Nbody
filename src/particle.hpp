@@ -57,6 +57,9 @@ ParticleFileHeader detect_particle_file_header(std::ifstream &inFile) {
       "Unsupported particle file layout. Expected planar doubles with a 32-bit "
       "or 64-bit particle count header.");
 }
+
+} // namespace
+
 struct DeviceParticlesView {
   std::size_t count;
 
@@ -68,8 +71,6 @@ struct DeviceParticlesView {
   double *vy;
   double *vz;
 };
-
-} // namespace
 
 class Particles {
 private:

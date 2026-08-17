@@ -4,8 +4,6 @@
 
 #include <thrust/device_vector.h>
 
-class Particles;
-
 struct BboxValues {
   double center_x;
   double center_y;
@@ -18,9 +16,13 @@ public:
   static constexpr std::size_t value_count = 4;
 
   Bbox();
-  explicit Bbox(Particles &bodies);
+  // Coordinate pointers must each reference at least count doubles in device
+  // memory.
+  Bbox(const double *d_x, const double *d_y, const double *d_z,
+       std::size_t count);
 
-  void recompute(Particles &bodies);
+  void recompute(const double *d_x, const double *d_y, const double *d_z,
+                 std::size_t count);
 
   [[nodiscard]] BboxValues values() const;
   [[nodiscard]] const double *device_data() const noexcept;
@@ -29,5 +31,6 @@ public:
 private:
   thrust::device_vector<double> centre_and_side_;
 
-  void compute_box(Particles &bodies);
+  void compute_box(const double *d_x, const double *d_y, const double *d_z,
+                   std::size_t count);
 };
