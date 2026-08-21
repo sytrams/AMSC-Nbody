@@ -126,9 +126,9 @@ jobs:
           echo "VPN did not become ready"
           exit 1
 
-      - name: Verify SSH over VPN
+      - name: Run Tests
         id: ssh
-        timeout-minutes: 1
+        timeout-minutes: 10
         run: |
           ssh -T -i ~/.ssh/cineca \
             -o BatchMode=yes \
@@ -139,7 +139,28 @@ jobs:
             -o ConnectionAttempts=1 \
             "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}" \
             true
+          qsub -I -q gpu
+          apptainer shell --nv /software/containers/nvhpc.sif
+          nvcc /software/containers/nvhpc/saxpy.cu -DNDEBUG -O4 -o \
+            saxpy.cpu -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CPP
+          nvcc /software/containers/nvhpc/saxpy.cu -arch=sm_89 -DNDEBUG -O4 \
+            -o saxpy.gpu
+          ./saxpy.cpu
+          ./saxpy.gpu
+          
+          cd ~/AMSC-Nbody-fresh
 
+          git pull
+
+          cmake -S . -B build/all-tests \
+            -DBUILD_TESTING=ON \
+            -DNBODY_ENABLE_CUDA=ON \
+            -DNBODY_BUILD_VIEWER=OFF
+
+          cmake --build build/all-tests --parallel
+
+          ctest --test-dir build/all-tests --output-on-failure
+          
       - name: Stop VPN
         cancel: vpn
 
