@@ -138,7 +138,7 @@ jobs:
             -o ConnectTimeout=15 \
             -o ConnectionAttempts=1 \
             "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}" \
-            true
+            true << 'EOF'
           qsub -I -q gpu
           apptainer shell --nv /software/containers/nvhpc.sif
           nvcc /software/containers/nvhpc/saxpy.cu -DNDEBUG -O4 -o \
@@ -160,6 +160,7 @@ jobs:
           cmake --build build/all-tests --parallel
 
           ctest --test-dir build/all-tests --output-on-failure
+          EOF
           
       - name: Stop VPN
         cancel: vpn
