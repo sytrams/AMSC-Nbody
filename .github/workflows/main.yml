@@ -9,7 +9,7 @@ on:
 jobs:
   connect:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    timeout-minutes: 90
 
     steps:
       - name: Check out repository
@@ -140,6 +140,175 @@ jobs:
             "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}" \
             true
 
+      - name: Run tests on a PBS GPU node
+        id: tests
+        continue-on-error: true
+        timeout-minutes: 60
+        shell: bash
+        env:
+          RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
+          ssh_options=(
+            -T
+            -i ~/.ssh/cineca
+            -o BatchMode=yes
+            -o IdentitiesOnly=yes
+            -o StrictHostKeyChecking=yes
+            -o NumberOfPasswordPrompts=0
+            -o ConnectTimeout=30
+            -o ConnectionAttempts=2
+          )
+          printf -v remote_arguments '%q ' "$RUN_KEY"
+
+          ssh "${ssh_options[@]}" "$target" \
+            "bash -s -- $remote_arguments" <<'REMOTE_SCRIPT'
+          set -euo pipefail
+
+          run_key="$1"
+          repository="$HOME/AMSC-Nbody-fresh"
+          results_dir="$repository/.ci-results/$run_key"
+          mkdir -p "$results_dir"
+
+          cd "$repository"
+          git pull --ff-only
+
+          command -v qsub
+          command -v qstat
+          command -v apptainer
+
+          job_environment="NBODY_REPOSITORY=$repository"
+          job_environment+=",NBODY_RESULTS_DIR=$results_dir"
+          job_id="$(
+            qsub \
+              -q gpu \
+              -l walltime=00:30:00 \
+              -N amsc-nbody-tests \
+              -j oe \
+              -o "$results_dir/pbs-job.out" \
+              -v "$job_environment" <<'PBS_SCRIPT'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+
+          record_exit_status() {
+            status=$?
+            set +e
+            printf '%s\n' "$status" > "$NBODY_RESULTS_DIR/test-exit-code"
+          }
+          trap record_exit_status EXIT
+
+          apptainer exec \
+            --nv \
+            --bind "$NBODY_REPOSITORY:$NBODY_REPOSITORY" \
+            --bind "$NBODY_RESULTS_DIR:$NBODY_RESULTS_DIR" \
+            /software/containers/nvhpc.sif \
+            bash -se -- "$NBODY_REPOSITORY" "$NBODY_RESULTS_DIR" <<'CONTAINER_SCRIPT'
+          set -Eeuo pipefail
+
+          repository="$1"
+          results_dir="$2"
+
+          nvcc /software/containers/nvhpc/saxpy.cu \
+            -DNDEBUG -O4 \
+            -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CPP \
+            -o "$results_dir/saxpy.cpu"
+          nvcc /software/containers/nvhpc/saxpy.cu \
+            -arch=sm_89 -DNDEBUG -O4 \
+            -o "$results_dir/saxpy.gpu"
+          "$results_dir/saxpy.cpu"
+          "$results_dir/saxpy.gpu"
+
+          cd "$repository"
+          cmake -S . -B build/all-tests \
+            -DBUILD_TESTING=ON \
+            -DNBODY_ENABLE_CUDA=ON \
+            -DNBODY_BUILD_VIEWER=OFF
+          cmake --build build/all-tests --parallel
+          ctest \
+            --test-dir build/all-tests \
+            --output-on-failure \
+            --no-tests=error \
+            --output-junit "$results_dir/ctest-results.xml" \
+            2>&1 | tee "$results_dir/ctest-output.log"
+          CONTAINER_SCRIPT
+          PBS_SCRIPT
+          )"
+
+          printf 'Submitted PBS job %s\n' "$job_id"
+
+          job_finished=false
+          for attempt in {1..330}; do
+            job_state="$(
+              qstat -f "$job_id" 2>/dev/null \
+                | awk '$1 == "job_state" { print $3; exit }' \
+                || true
+            )"
+            case "$job_state" in
+              F|X|"")
+                job_finished=true
+                break
+                ;;
+              *)
+                sleep 10
+                ;;
+            esac
+          done
+
+          if [[ "$job_finished" != true ]]; then
+            echo "Timed out waiting for PBS job $job_id" >&2
+            exit 1
+          fi
+
+          for attempt in {1..12}; do
+            [[ -s "$results_dir/test-exit-code" ]] && break
+            sleep 5
+          done
+
+          if [[ -f "$results_dir/pbs-job.out" ]]; then
+            cat "$results_dir/pbs-job.out"
+          fi
+
+          if [[ ! -s "$results_dir/test-exit-code" ]]; then
+            echo "PBS job $job_id did not produce a test exit code" >&2
+            exit 1
+          fi
+
+          test_exit_code="$(<"$results_dir/test-exit-code")"
+          if [[ ! "$test_exit_code" =~ ^[0-9]+$ ]]; then
+            echo "Invalid test exit code: $test_exit_code" >&2
+            exit 1
+          fi
+
+          exit "$test_exit_code"
+          REMOTE_SCRIPT
+
+      - name: Download test results
+        id: collect_tests
+        if: ${{ always() && steps.tests.outcome != 'skipped' }}
+        continue-on-error: true
+        timeout-minutes: 10
+        shell: bash
+        env:
+          RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+        run: |
+          set -euo pipefail
+
+          results_path="$RUNNER_TEMP/cluster-test-results"
+          mkdir -p "$results_path"
+          scp \
+            -r \
+            -i ~/.ssh/cineca \
+            -o BatchMode=yes \
+            -o IdentitiesOnly=yes \
+            -o StrictHostKeyChecking=yes \
+            -o NumberOfPasswordPrompts=0 \
+            -o ConnectTimeout=30 \
+            -o ConnectionAttempts=2 \
+            "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}:AMSC-Nbody-fresh/.ci-results/$RUN_KEY/." \
+            "$results_path/"
+
       - name: Stop VPN
         cancel: vpn
 
@@ -148,7 +317,7 @@ jobs:
         shell: bash
         run: sudo -n gpclient disconnect || true
 
-      - name: Write VPN authentication summary
+      - name: Write automation summary
         if: ${{ always() }}
         shell: bash
         run: |
@@ -158,11 +327,76 @@ jobs:
             echo "- VPN background process: \`${{ steps.vpn.outcome }}\`"
             echo "- VPN readiness check: \`${{ steps.vpn_wait.outcome }}\`"
             echo "- SSH connectivity check: \`${{ steps.ssh.outcome }}\`"
+            echo "- PBS GPU tests: \`${{ steps.tests.outcome }}\`"
+            echo "- Test-result collection: \`${{ steps.collect_tests.outcome }}\`"
             if test -f "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"; then
               echo
               cat "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+          python3 <<'PYTHON'
+          import os
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          results_path = Path(os.environ["RUNNER_TEMP"]) / "cluster-test-results"
+          junit_path = results_path / "ctest-results.xml"
+
+          with summary_path.open("a", encoding="utf-8") as summary:
+              print(file=summary)
+              print("## Test results", file=summary)
+              print(file=summary)
+
+              if not junit_path.is_file():
+                  print(
+                      "Test results are unavailable. Check the Run tests step "
+                      "and, when present, the cluster-test-results artifact.",
+                      file=summary,
+                  )
+              else:
+                  try:
+                      root = ET.parse(junit_path).getroot()
+                  except (ET.ParseError, OSError) as error:
+                      print(f"CTest result XML could not be read: `{error}`", file=summary)
+                  else:
+                      cases = list(root.iter("testcase"))
+                      failed = []
+                      skipped = 0
+
+                      for case in cases:
+                          failure = case.find("failure")
+                          error = case.find("error")
+                          if failure is not None or error is not None:
+                              suite = case.get("classname", "").strip()
+                              name = case.get("name", "unnamed test").strip()
+                              label = f"{suite}.{name}" if suite else name
+                              failed.append(label)
+                          elif case.find("skipped") is not None:
+                              skipped += 1
+
+                      passed = len(cases) - len(failed) - skipped
+                      print(
+                          f"- Total: **{len(cases)}**; passed: **{passed}**; "
+                          f"failed: **{len(failed)}**; skipped: **{skipped}**",
+                          file=summary,
+                      )
+
+                      if failed:
+                          print(file=summary)
+                          print(f"### Failed tests ({len(failed)})", file=summary)
+                          print(file=summary)
+                          for name in failed:
+                              safe_name = name.replace("`", "'")
+                              print(f"- `{safe_name}`", file=summary)
+                      elif cases:
+                          print(file=summary)
+                          print(f"All {len(cases)} tests passed.", file=summary)
+                      else:
+                          print(file=summary)
+                          print("CTest did not report any tests.", file=summary)
+          PYTHON
 
       - name: Upload VPN authentication diagnostics
         if: ${{ failure() && steps.vpn_wait.outcome == 'failure' }}
@@ -172,3 +406,20 @@ jobs:
           path: ${{ runner.temp }}/vpn-auth-diagnostics/
           if-no-files-found: ignore
           retention-days: 3
+
+      - name: Upload cluster test results
+        if: ${{ always() && steps.tests.outcome != 'skipped' }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: cluster-test-results-${{ github.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/cluster-test-results/
+          if-no-files-found: warn
+          retention-days: 14
+
+      - name: Fail job when tests or result collection fail
+        if: >-
+          ${{ always() &&
+              (steps.tests.outcome == 'failure' ||
+               steps.collect_tests.outcome == 'failure') }}
+        shell: bash
+        run: exit 1
