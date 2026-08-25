@@ -270,19 +270,11 @@ jobs:
             printf '[container] stage: %s\n' "$1"
           }
 
-          mark_stage "compiling the CPU SAXPY smoke test"
-          nvcc /software/containers/nvhpc/saxpy.cu \
-            -DNDEBUG -O4 \
-            -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CPP \
-            -o "$results_dir/saxpy.cpu"
-          mark_stage "compiling the GPU SAXPY smoke test"
-          nvcc /software/containers/nvhpc/saxpy.cu \
-            -arch=sm_89 -DNDEBUG -O4 \
-            -o "$results_dir/saxpy.gpu"
-          mark_stage "running the CPU SAXPY smoke test"
-          "$results_dir/saxpy.cpu"
-          mark_stage "running the GPU SAXPY smoke test"
-          "$results_dir/saxpy.gpu"
+          # CMake and the project tests provide the real compiler/GPU checks.
+          # Do not depend on sample sources outside the container image.
+          mark_stage "checking the CUDA compiler"
+          command -v nvcc
+          nvcc --version
 
           mark_stage "configuring the CMake test build"
           cd "$repository"
