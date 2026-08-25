@@ -207,19 +207,53 @@ jobs:
           #!/usr/bin/env bash
           set -Eeuo pipefail
 
+          live_log="$NBODY_RESULTS_DIR/pbs-live.log"
+          stage_file="$NBODY_RESULTS_DIR/current-stage.txt"
+          status_file="$NBODY_RESULTS_DIR/pbs-status.txt"
+          : > "$live_log"
+          exec >> "$live_log" 2>&1
+
+          mark_stage() {
+            printf '%s\n' "$1" > "$stage_file"
+            printf '[pbs] stage: %s\n' "$1"
+          }
+
           record_exit_status() {
             status=$?
             set +e
+
+            stage="unknown"
+            if [[ -s "$stage_file" ]]; then
+              IFS= read -r stage < "$stage_file"
+            fi
+
+            {
+              printf 'exit_code=%s\n' "$status"
+              printf 'stage=%s\n' "$stage"
+              printf 'host=%s\n' "$(hostname -f 2>/dev/null || hostname 2>/dev/null || printf unknown)"
+            } > "$status_file"
+
+            if (( status == 0 )); then
+              printf '[pbs] completed successfully at stage: %s\n' "$stage"
+            else
+              printf '[pbs] failed with exit code %s at stage: %s\n' \
+                "$status" "$stage" >&2
+            fi
+
+            # This is the completion marker observed by the login-node process.
+            # Write it last, after every diagnostic file has been flushed.
             printf '%s\n' "$status" > "$NBODY_RESULTS_DIR/test-exit-code"
           }
           trap record_exit_status EXIT
 
+          mark_stage "checking compute-node prerequisites"
           if ! command -v apptainer >/dev/null 2>&1; then
             echo "Required compute-node command is unavailable: apptainer" >&2
             echo "Compute-node PATH: $PATH" >&2
             exit 127
           fi
 
+          mark_stage "starting the NVHPC container"
           apptainer exec \
             --nv \
             --bind "$NBODY_REPOSITORY:$NBODY_REPOSITORY" \
@@ -231,23 +265,35 @@ jobs:
           repository="$1"
           results_dir="$2"
 
+          mark_stage() {
+            printf '%s\n' "$1" > "$results_dir/current-stage.txt"
+            printf '[container] stage: %s\n' "$1"
+          }
+
+          mark_stage "compiling the CPU SAXPY smoke test"
           nvcc /software/containers/nvhpc/saxpy.cu \
             -DNDEBUG -O4 \
             -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CPP \
             -o "$results_dir/saxpy.cpu"
+          mark_stage "compiling the GPU SAXPY smoke test"
           nvcc /software/containers/nvhpc/saxpy.cu \
             -arch=sm_89 -DNDEBUG -O4 \
             -o "$results_dir/saxpy.gpu"
+          mark_stage "running the CPU SAXPY smoke test"
           "$results_dir/saxpy.cpu"
+          mark_stage "running the GPU SAXPY smoke test"
           "$results_dir/saxpy.gpu"
 
+          mark_stage "configuring the CMake test build"
           cd "$repository"
           cmake -S . -B build/all-tests \
             -DBUILD_TESTING=ON \
             -DNBODY_ENABLE_CUDA=ON \
             -DNBODY_BUILD_VIEWER=OFF
+          mark_stage "building the CMake test suite"
           cmake --build build/all-tests --parallel
 
+          mark_stage "running CTest"
           set +e
           ctest \
             --test-dir build/all-tests \
@@ -268,25 +314,52 @@ jobs:
             echo "CTest reported one or more skipped tests" >&2
             exit 1
           fi
+
+          mark_stage "completed all tests"
           CONTAINER_SCRIPT
           PBS_SCRIPT
           )"
 
           printf 'Submitted PBS job %s\n' "$job_id"
+          printf 'job_id=%s\n' "$job_id" > "$results_dir/pbs-dispatch.txt"
 
           job_finished=false
+          missing_state_polls=0
+          last_job_state=""
           for attempt in {1..330}; do
+            if [[ -s "$results_dir/test-exit-code" ]]; then
+              job_finished=true
+              break
+            fi
+
             job_state="$(
               qstat -f "$job_id" 2>/dev/null \
                 | awk '$1 == "job_state" { print $3; exit }' \
                 || true
             )"
+
+            if [[ "$job_state" != "$last_job_state" ]]; then
+              printf 'PBS job state: %s\n' "${job_state:-not visible}"
+              last_job_state="$job_state"
+            fi
+
             case "$job_state" in
-              F|X|"")
+              F|X)
                 job_finished=true
                 break
                 ;;
+              "")
+                ((missing_state_polls += 1))
+                # A finished job may disappear from qstat before its spool files
+                # are copied. Allow one minute for the direct completion marker.
+                if (( missing_state_polls >= 6 )); then
+                  job_finished=true
+                  break
+                fi
+                sleep 10
+                ;;
               *)
+                missing_state_polls=0
                 sleep 10
                 ;;
             esac
@@ -302,8 +375,19 @@ jobs:
             sleep 5
           done
 
-          if [[ -f "$results_dir/pbs-job.out" ]]; then
-            cat "$results_dir/pbs-job.out"
+          if ! qstat -xf "$job_id" > "$results_dir/pbs-qstat.txt" 2>&1; then
+            qstat -f "$job_id" >> "$results_dir/pbs-qstat.txt" 2>&1 || true
+          fi
+
+          for job_log in pbs-live.log pbs-job.out; do
+            if [[ -f "$results_dir/$job_log" ]]; then
+              printf '\n===== %s =====\n' "$job_log"
+              cat "$results_dir/$job_log" || true
+            fi
+          done
+
+          if [[ ! -f "$results_dir/pbs-live.log" ]]; then
+            echo "PBS job did not produce the direct live log" >&2
           fi
 
           if [[ ! -s "$results_dir/test-exit-code" ]]; then
@@ -384,6 +468,29 @@ jobs:
           results_path = Path(os.environ["RUNNER_TEMP"]) / "cluster-test-results"
           junit_path = results_path / "ctest-results.xml"
           orchestration_log = results_path / "orchestration.log"
+          pbs_live_log = results_path / "pbs-live.log"
+          pbs_spool_log = results_path / "pbs-job.out"
+          pbs_status_path = results_path / "pbs-status.txt"
+          pbs_dispatch_path = results_path / "pbs-dispatch.txt"
+
+          def read_key_values(*paths: Path) -> dict[str, str]:
+              values: dict[str, str] = {}
+              for path in paths:
+                  if not path.is_file():
+                      continue
+                  for line in path.read_text(
+                      encoding="utf-8", errors="replace"
+                  ).splitlines():
+                      key, separator, value = line.partition("=")
+                      if separator and key.strip():
+                          values[key.strip()] = value.strip()
+              return values
+
+          def read_log_excerpt(path: Path, line_limit: int = 40) -> str:
+              lines = path.read_text(
+                  encoding="utf-8", errors="replace"
+              ).splitlines()
+              return "\n".join(lines[-line_limit:])[-8000:]
 
           with summary_path.open("a", encoding="utf-8") as summary:
               print(file=summary)
@@ -392,20 +499,53 @@ jobs:
 
               if not junit_path.is_file():
                   print(
-                      "Test results are unavailable. Check the Run tests step "
-                      "and, when present, the cluster-test-results artifact.",
+                      "CTest did not produce a JUnit report. The failure happened "
+                      "before CTest completed, or the remote job could not start.",
                       file=summary,
                   )
-                  if orchestration_log.is_file():
-                      lines = orchestration_log.read_text(
-                          encoding="utf-8", errors="replace"
-                      ).splitlines()
-                      if lines:
+
+                  pbs_status = read_key_values(
+                      pbs_dispatch_path,
+                      pbs_status_path,
+                  )
+                  if pbs_status:
+                      print(file=summary)
+                      print("### PBS failure details", file=summary)
+                      print(file=summary)
+                      if job_id := pbs_status.get("job_id"):
+                          print(f"- Job: `{job_id}`", file=summary)
+                      if exit_code := pbs_status.get("exit_code"):
+                          print(f"- Exit code: `{exit_code}`", file=summary)
+                      if stage := pbs_status.get("stage"):
+                          print(f"- Last stage: `{stage}`", file=summary)
+                      if host := pbs_status.get("host"):
+                          print(f"- Compute host: `{host}`", file=summary)
+
+                  diagnostic_log = next(
+                      (
+                          path
+                          for path in (
+                              pbs_live_log,
+                              pbs_spool_log,
+                              orchestration_log,
+                          )
+                          if path.is_file() and path.stat().st_size
+                      ),
+                      None,
+                  )
+                  if diagnostic_log is not None:
+                      excerpt = read_log_excerpt(diagnostic_log)
+                      if excerpt:
                           print(file=summary)
-                          print("### Last orchestration messages", file=summary)
+                          print("<details>", file=summary)
+                          print(
+                              f"<summary>Last messages from "
+                              f"{diagnostic_log.name}</summary>",
+                              file=summary,
+                          )
                           print(file=summary)
-                          for line in lines[-20:]:
-                              print(f"    {line}", file=summary)
+                          print(f"<pre>{html.escape(excerpt)}</pre>", file=summary)
+                          print("</details>", file=summary)
               else:
                   try:
                       root = ET.parse(junit_path).getroot()
