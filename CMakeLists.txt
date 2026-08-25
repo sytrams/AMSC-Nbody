@@ -4,9 +4,9 @@
 # repository root; each workflow gets its own build directory so their cached
 # options do not interfere with one another.
 #
-# CPU tests (requires a C++23 compiler, Thrust from the bundled CCCL tree or a
-# CUDA toolkit, and unless GTest is installed, network access during the first
-# configure so FetchContent can download GoogleTest):
+# CPU tests (requires a C++23 compiler and, during the first configure, network
+# access so FetchContent can download the pinned CCCL and, unless GTest is
+# installed, GoogleTest):
 #   cmake -S . -B build/cpu-tests -DBUILD_TESTING=ON \
 #     -DNBODY_ENABLE_CUDA=OFF -DNBODY_BUILD_VIEWER=OFF
 #   cmake --build build/cpu-tests --parallel
@@ -68,28 +68,43 @@ option(
 # The particle loader is header-only. nbody::particle gives consumers a stable,
 # namespaced target and carries the project/Thrust include paths with it.
 if(BUILD_TESTING)
-    # Prefer the bundled CCCL package when it is present. Minimal server copies
-    # may omit external/cccl, so fall back to the Thrust package belonging to
-    # the CUDA toolkit selected by nvcc without enabling the CUDA language.
-    set(
-        nbody_bundled_thrust_dir
-        "${PROJECT_SOURCE_DIR}/external/cccl/lib/cmake/thrust")
-    if(EXISTS "${nbody_bundled_thrust_dir}/thrust-config.cmake")
-        set(nbody_thrust_hints "${nbody_bundled_thrust_dir}")
-    else()
+    if(NBODY_ENABLE_CUDA)
+        # CUDA builds must use the CCCL version shipped with their selected
+        # toolkit. This keeps local-container and cluster compilation aligned
+        # and avoids silently preferring an unrelated source-tree checkout.
         find_package(CUDAToolkit REQUIRED)
         file(
             GLOB nbody_toolkit_thrust_hints
             LIST_DIRECTORIES TRUE
             "${CUDAToolkit_LIBRARY_ROOT}/targets/*/lib/cmake/thrust")
         set(
-            nbody_thrust_hints
+            nbody_toolkit_thrust_hints
             "${CUDAToolkit_TARGET_DIR}/lib/cmake/thrust"
             "${CUDAToolkit_LIBRARY_ROOT}/lib/cmake/thrust"
             ${nbody_toolkit_thrust_hints})
+        find_package(
+            Thrust
+            REQUIRED
+            CONFIG
+            HINTS ${nbody_toolkit_thrust_hints}
+            NO_DEFAULT_PATH)
+    else()
+        # Host-only macOS builds have no CUDA toolkit from which to obtain
+        # Thrust. Fetch the exact CCCL commit validated with Apple Clang/LLVM 18
+        # so CPU tests remain reproducible without keeping external/cccl in the
+        # repository. CUDA builds never use this host-only fallback.
+        include(FetchContent)
+        FetchContent_Declare(
+            nbody_cccl
+            URL
+                https://github.com/NVIDIA/cccl/archive/459e81a530f2b500a90ca24293c0c22a70cc89ef.tar.gz
+            URL_HASH
+                SHA256=428aa58a77d90259cd53090549fe6d8316e161ca22824f739c4b29d3051c5f15
+            DOWNLOAD_EXTRACT_TIMESTAMP TRUE
+            EXCLUDE_FROM_ALL)
+        FetchContent_MakeAvailable(nbody_cccl)
     endif()
 
-    find_package(Thrust REQUIRED CONFIG HINTS ${nbody_thrust_hints})
     thrust_create_target(nbody_thrust_cpp HOST CPP DEVICE CPP)
 
     add_library(nbody_particle INTERFACE)
@@ -145,6 +160,7 @@ if(NBODY_ENABLE_CUDA)
         nbody_cuda
         STATIC
         gpu/cuda_kernels/globalbounding.cu
+        gpu/cuda_kernels/morton.cu
         gpu/cuda_kernels/morton_leaf_groups.cu
         gpu/cuda_kernels/octree_builder.cu
         gpu/cuda_kernels/octree_physics.cu

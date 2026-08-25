@@ -125,7 +125,7 @@ void Bbox::compute_box(const double *d_x, const double *d_y, const double *d_z,
 
   // Use the longest axis so the resulting cube encloses all three axis-aligned
   // ranges while remaining centered on the original bounding box.
-  double side = std::max({result.xmax - result.xmin, result.ymax - result.ymin,
+  double side = 1.1*std::max({result.xmax - result.xmin, result.ymax - result.ymin,
                           result.zmax - result.zmin});
 
   // A positive side keeps later Morton normalization well-defined when every

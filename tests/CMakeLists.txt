@@ -27,7 +27,7 @@ target_link_libraries(
         nbody::particle
         GTest::gtest_main)
 # nbody::particle supplies Thrust's portable C++ host/device backend and the
-# include paths for either the bundled or active-toolkit CCCL package.
+# include paths for either the pinned host package or active-toolkit CCCL.
 # PRE_TEST delays discovery until CTest runs. This is friendlier to cross builds
 # because CMake does not need to execute the new binary during the build step.
 # The prefix and label make CPU cases easy to select with -R and -L.
@@ -94,6 +94,7 @@ if(TARGET nbody::cuda)
         nbody_cuda_unit_tests
         unit
         unit/cuda/globalbounding_test.cu
+        unit/cuda/morton_test.cu
         unit/cuda/morton_leaf_groups_test.cu
         unit/cuda/tree_builder_test.cu)
 
