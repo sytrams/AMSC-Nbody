@@ -22,6 +22,10 @@ from playwright.sync_api import BrowserContext, Locator, Page, sync_playwright
 CALLBACK_PREFIX = "globalprotectcallback:"
 CALLBACK_PATTERN = re.compile(r"globalprotectcallback:[^\s\"'<>]+", re.IGNORECASE)
 HTTP_URL_PATTERN = re.compile(r"https?://[^\s)\]]+", re.IGNORECASE)
+REDACTED_HOST_PATTERN = re.compile(
+    r"(https?)://\[redacted\]", re.IGNORECASE
+)
+URL_REDACTION_SENTINEL = "__nbody_url_redacted__"
 UUID_PATTERN = re.compile(
     r"\b[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-"
     r"[89ab][0-9a-f]{3}-[0-9a-f]{12}\b",
@@ -334,9 +338,32 @@ def insert_otp(
 def redact_sensitive_values(text: str, secrets: tuple[str, ...]) -> str:
     sanitized = CALLBACK_PATTERN.sub("[callback redacted]", text)
     sanitized = UUID_PATTERN.sub("[identifier redacted]", sanitized)
+    # Protect placeholders produced by a previous sanitization pass. This also
+    # turns an already-redacted bracketed hostname into a normal placeholder
+    # hostname before urlsplit sees it.
+    sanitized = REDACTED_HOST_PATTERN.sub(
+        lambda match: f"{match.group(1).lower()}://host",
+        sanitized,
+    )
+    sanitized = sanitized.replace(
+        "[url redacted]", URL_REDACTION_SENTINEL
+    )
 
     def redact_url(match: re.Match[str]) -> str:
-        parsed = urlsplit(match.group(0).rstrip(".,;"))
+        candidate = match.group(0).rstrip(".,;")
+        try:
+            parsed = urlsplit(candidate)
+        except ValueError:
+            # Diagnostic text can be sanitized more than once. A URL whose
+            # hostname was already replaced becomes ``https://[redacted]``;
+            # HTTP_URL_PATTERN intentionally stops before the closing bracket,
+            # so urlsplit would otherwise interpret it as malformed IPv6 and
+            # mask the original VPN error.
+            scheme = candidate.partition("://")[0].lower()
+            if scheme not in {"http", "https"}:
+                scheme = "https"
+            return f"{scheme}://host/[url redacted]"
+
         hostname = parsed.hostname or "host"
         try:
             port = f":{parsed.port}" if parsed.port is not None else ""
@@ -345,6 +372,9 @@ def redact_sensitive_values(text: str, secrets: tuple[str, ...]) -> str:
         return f"{parsed.scheme}://{hostname}{port}/[url redacted]"
 
     sanitized = HTTP_URL_PATTERN.sub(redact_url, sanitized)
+    sanitized = sanitized.replace(
+        URL_REDACTION_SENTINEL, "[url redacted]"
+    )
     for secret in secrets:
         if secret:
             sanitized = sanitized.replace(secret, "[redacted]")

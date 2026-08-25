@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - codex/automation-test
 
 jobs:
   connect:
@@ -142,7 +141,6 @@ jobs:
 
       - name: Run tests on a PBS GPU node
         id: tests
-        continue-on-error: true
         timeout-minutes: 60
         shell: bash
         env:
@@ -163,8 +161,13 @@ jobs:
           )
           printf -v remote_arguments '%q ' "$RUN_KEY"
 
+          results_path="$RUNNER_TEMP/cluster-test-results"
+          mkdir -p "$results_path"
+
+          set +e
+          {
           ssh "${ssh_options[@]}" "$target" \
-            "bash -s -- $remote_arguments" <<'REMOTE_SCRIPT'
+            "bash -l -s -- $remote_arguments" <<'REMOTE_SCRIPT'
           set -euo pipefail
 
           run_key="$1"
@@ -175,9 +178,20 @@ jobs:
           cd "$repository"
           git pull --ff-only
 
-          command -v qsub
-          command -v qstat
-          command -v apptainer
+          if [[ -r /etc/profile.d/pbs.sh ]]; then
+            set +u
+            source /etc/profile.d/pbs.sh
+            set -u
+          fi
+
+          for required_command in qsub qstat; do
+            if ! command_path="$(command -v "$required_command")"; then
+              echo "Required cluster command is unavailable: $required_command" >&2
+              echo "Remote PATH: $PATH" >&2
+              exit 127
+            fi
+            printf 'Using %s: %s\n' "$required_command" "$command_path"
+          done
 
           job_environment="NBODY_REPOSITORY=$repository"
           job_environment+=",NBODY_RESULTS_DIR=$results_dir"
@@ -192,65 +206,151 @@ jobs:
           #!/usr/bin/env bash
           set -Eeuo pipefail
 
+          live_log="$NBODY_RESULTS_DIR/pbs-live.log"
+          stage_file="$NBODY_RESULTS_DIR/current-stage.txt"
+          status_file="$NBODY_RESULTS_DIR/pbs-status.txt"
+          : > "$live_log"
+          exec >> "$live_log" 2>&1
+
+          mark_stage() {
+            printf '%s\n' "$1" > "$stage_file"
+            printf '[pbs] stage: %s\n' "$1"
+          }
+
           record_exit_status() {
             status=$?
             set +e
+
+            stage="unknown"
+            if [[ -s "$stage_file" ]]; then
+              IFS= read -r stage < "$stage_file"
+            fi
+
+            {
+              printf 'exit_code=%s\n' "$status"
+              printf 'stage=%s\n' "$stage"
+              printf 'host=%s\n' "$(hostname -f 2>/dev/null || hostname 2>/dev/null || printf unknown)"
+            } > "$status_file"
+
+            if (( status == 0 )); then
+              printf '[pbs] completed successfully at stage: %s\n' "$stage"
+            else
+              printf '[pbs] failed with exit code %s at stage: %s\n' \
+                "$status" "$stage" >&2
+            fi
+
+            # This is the completion marker observed by the login-node process.
+            # Write it last, after every diagnostic file has been flushed.
             printf '%s\n' "$status" > "$NBODY_RESULTS_DIR/test-exit-code"
           }
           trap record_exit_status EXIT
 
+          mark_stage "checking compute-node prerequisites"
+          if ! command -v apptainer >/dev/null 2>&1; then
+            echo "Required compute-node command is unavailable: apptainer" >&2
+            echo "Compute-node PATH: $PATH" >&2
+            exit 127
+          fi
+
+          mark_stage "starting the NVHPC container"
           apptainer exec \
             --nv \
             --bind "$NBODY_REPOSITORY:$NBODY_REPOSITORY" \
             --bind "$NBODY_RESULTS_DIR:$NBODY_RESULTS_DIR" \
-            /software/containers/nvhpc.sif \
+            /software/containers/nvhpc/nvhpc.sif \
             bash -se -- "$NBODY_REPOSITORY" "$NBODY_RESULTS_DIR" <<'CONTAINER_SCRIPT'
           set -Eeuo pipefail
 
           repository="$1"
           results_dir="$2"
 
-          nvcc /software/containers/nvhpc/saxpy.cu \
-            -DNDEBUG -O4 \
-            -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CPP \
-            -o "$results_dir/saxpy.cpu"
-          nvcc /software/containers/nvhpc/saxpy.cu \
-            -arch=sm_89 -DNDEBUG -O4 \
-            -o "$results_dir/saxpy.gpu"
-          "$results_dir/saxpy.cpu"
-          "$results_dir/saxpy.gpu"
+          mark_stage() {
+            printf '%s\n' "$1" > "$results_dir/current-stage.txt"
+            printf '[container] stage: %s\n' "$1"
+          }
 
+          # CMake and the project tests provide the real compiler/GPU checks.
+          # Do not depend on sample sources outside the container image.
+          mark_stage "checking the CUDA compiler"
+          command -v nvcc
+          nvcc --version
+
+          mark_stage "configuring the CMake test build"
           cd "$repository"
           cmake -S . -B build/all-tests \
             -DBUILD_TESTING=ON \
             -DNBODY_ENABLE_CUDA=ON \
             -DNBODY_BUILD_VIEWER=OFF
+          mark_stage "building the CMake test suite"
           cmake --build build/all-tests --parallel
+
+          mark_stage "running CTest"
+          set +e
           ctest \
             --test-dir build/all-tests \
             --output-on-failure \
             --no-tests=error \
             --output-junit "$results_dir/ctest-results.xml" \
             2>&1 | tee "$results_dir/ctest-output.log"
+          ctest_status=${PIPESTATUS[0]}
+          set -e
+
+          if (( ctest_status != 0 )); then
+            exit "$ctest_status"
+          fi
+
+          # A skipped CUDA test on an allocated GPU node means the requested
+          # suite did not fully execute, so treat it as an automation failure.
+          if grep -q '<skipped' "$results_dir/ctest-results.xml"; then
+            echo "CTest reported one or more skipped tests" >&2
+            exit 1
+          fi
+
+          mark_stage "completed all tests"
           CONTAINER_SCRIPT
           PBS_SCRIPT
           )"
 
           printf 'Submitted PBS job %s\n' "$job_id"
+          printf 'job_id=%s\n' "$job_id" > "$results_dir/pbs-dispatch.txt"
 
           job_finished=false
+          missing_state_polls=0
+          last_job_state=""
           for attempt in {1..330}; do
+            if [[ -s "$results_dir/test-exit-code" ]]; then
+              job_finished=true
+              break
+            fi
+
             job_state="$(
               qstat -f "$job_id" 2>/dev/null \
                 | awk '$1 == "job_state" { print $3; exit }' \
                 || true
             )"
+
+            if [[ "$job_state" != "$last_job_state" ]]; then
+              printf 'PBS job state: %s\n' "${job_state:-not visible}"
+              last_job_state="$job_state"
+            fi
+
             case "$job_state" in
-              F|X|"")
+              F|X)
                 job_finished=true
                 break
                 ;;
+              "")
+                ((missing_state_polls += 1))
+                # A finished job may disappear from qstat before its spool files
+                # are copied. Allow one minute for the direct completion marker.
+                if (( missing_state_polls >= 6 )); then
+                  job_finished=true
+                  break
+                fi
+                sleep 10
+                ;;
               *)
+                missing_state_polls=0
                 sleep 10
                 ;;
             esac
@@ -266,8 +366,19 @@ jobs:
             sleep 5
           done
 
-          if [[ -f "$results_dir/pbs-job.out" ]]; then
-            cat "$results_dir/pbs-job.out"
+          if ! qstat -xf "$job_id" > "$results_dir/pbs-qstat.txt" 2>&1; then
+            qstat -f "$job_id" >> "$results_dir/pbs-qstat.txt" 2>&1 || true
+          fi
+
+          for job_log in pbs-live.log pbs-job.out; do
+            if [[ -f "$results_dir/$job_log" ]]; then
+              printf '\n===== %s =====\n' "$job_log"
+              cat "$results_dir/$job_log" || true
+            fi
+          done
+
+          if [[ ! -f "$results_dir/pbs-live.log" ]]; then
+            echo "PBS job did not produce the direct live log" >&2
           fi
 
           if [[ ! -s "$results_dir/test-exit-code" ]]; then
@@ -281,13 +392,39 @@ jobs:
             exit 1
           fi
 
+          # Publish an explicit status marker. This is more reliable than using
+          # only the SSH process status after a long-running remote session.
+          printf 'NBODY_CI_TEST_EXIT_CODE=%s\n' "$test_exit_code"
           exit "$test_exit_code"
           REMOTE_SCRIPT
+          } 2>&1 | tee "$results_path/orchestration.log"
+          ssh_status=${PIPESTATUS[0]}
+
+          reported_test_status="$(
+            sed -n \
+              's/^NBODY_CI_TEST_EXIT_CODE=\([0-9][0-9]*\)$/\1/p' \
+              "$results_path/orchestration.log" \
+              | tail -n 1
+          )"
+
+          if [[ "$reported_test_status" =~ ^[0-9]+$ ]]; then
+            test_status="$reported_test_status"
+            if (( ssh_status != test_status )); then
+              printf \
+                'SSH returned %s after the remote job reported test status %s; using the explicit test status.\n' \
+                "$ssh_status" "$test_status" >&2
+            fi
+          else
+            echo "Remote test status marker was not received" >&2
+            test_status="$ssh_status"
+          fi
+
+          set -e
+          exit "$test_status"
 
       - name: Download test results
         id: collect_tests
         if: ${{ always() && steps.tests.outcome != 'skipped' }}
-        continue-on-error: true
         timeout-minutes: 10
         shell: bash
         env:
@@ -337,12 +474,37 @@ jobs:
 
           python3 <<'PYTHON'
           import os
+          import html
           from pathlib import Path
           import xml.etree.ElementTree as ET
 
           summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
           results_path = Path(os.environ["RUNNER_TEMP"]) / "cluster-test-results"
           junit_path = results_path / "ctest-results.xml"
+          orchestration_log = results_path / "orchestration.log"
+          pbs_live_log = results_path / "pbs-live.log"
+          pbs_spool_log = results_path / "pbs-job.out"
+          pbs_status_path = results_path / "pbs-status.txt"
+          pbs_dispatch_path = results_path / "pbs-dispatch.txt"
+
+          def read_key_values(*paths: Path) -> dict[str, str]:
+              values: dict[str, str] = {}
+              for path in paths:
+                  if not path.is_file():
+                      continue
+                  for line in path.read_text(
+                      encoding="utf-8", errors="replace"
+                  ).splitlines():
+                      key, separator, value = line.partition("=")
+                      if separator and key.strip():
+                          values[key.strip()] = value.strip()
+              return values
+
+          def read_log_excerpt(path: Path, line_limit: int = 40) -> str:
+              lines = path.read_text(
+                  encoding="utf-8", errors="replace"
+              ).splitlines()
+              return "\n".join(lines[-line_limit:])[-8000:]
 
           with summary_path.open("a", encoding="utf-8") as summary:
               print(file=summary)
@@ -351,10 +513,53 @@ jobs:
 
               if not junit_path.is_file():
                   print(
-                      "Test results are unavailable. Check the Run tests step "
-                      "and, when present, the cluster-test-results artifact.",
+                      "CTest did not produce a JUnit report. The failure happened "
+                      "before CTest completed, or the remote job could not start.",
                       file=summary,
                   )
+
+                  pbs_status = read_key_values(
+                      pbs_dispatch_path,
+                      pbs_status_path,
+                  )
+                  if pbs_status:
+                      print(file=summary)
+                      print("### PBS failure details", file=summary)
+                      print(file=summary)
+                      if job_id := pbs_status.get("job_id"):
+                          print(f"- Job: `{job_id}`", file=summary)
+                      if exit_code := pbs_status.get("exit_code"):
+                          print(f"- Exit code: `{exit_code}`", file=summary)
+                      if stage := pbs_status.get("stage"):
+                          print(f"- Last stage: `{stage}`", file=summary)
+                      if host := pbs_status.get("host"):
+                          print(f"- Compute host: `{host}`", file=summary)
+
+                  diagnostic_log = next(
+                      (
+                          path
+                          for path in (
+                              pbs_live_log,
+                              pbs_spool_log,
+                              orchestration_log,
+                          )
+                          if path.is_file() and path.stat().st_size
+                      ),
+                      None,
+                  )
+                  if diagnostic_log is not None:
+                      excerpt = read_log_excerpt(diagnostic_log)
+                      if excerpt:
+                          print(file=summary)
+                          print("<details>", file=summary)
+                          print(
+                              f"<summary>Last messages from "
+                              f"{diagnostic_log.name}</summary>",
+                              file=summary,
+                          )
+                          print(file=summary)
+                          print(f"<pre>{html.escape(excerpt)}</pre>", file=summary)
+                          print("</details>", file=summary)
               else:
                   try:
                       root = ET.parse(junit_path).getroot()
@@ -363,23 +568,30 @@ jobs:
                   else:
                       cases = list(root.iter("testcase"))
                       failed = []
-                      skipped = 0
+                      skipped = []
 
                       for case in cases:
                           failure = case.find("failure")
                           error = case.find("error")
-                          if failure is not None or error is not None:
-                              suite = case.get("classname", "").strip()
-                              name = case.get("name", "unnamed test").strip()
-                              label = f"{suite}.{name}" if suite else name
-                              failed.append(label)
-                          elif case.find("skipped") is not None:
-                              skipped += 1
+                          suite = case.get("classname", "").strip()
+                          name = case.get("name", "unnamed test").strip()
+                          label = f"{suite}.{name}" if suite else name
 
-                      passed = len(cases) - len(failed) - skipped
+                          problem = failure if failure is not None else error
+                          if problem is not None:
+                              message = (problem.get("message") or "").strip()
+                              output = (problem.text or "").strip()
+                              details = "\n".join(
+                                  part for part in (message, output) if part
+                              )
+                              failed.append((label, details))
+                          elif case.find("skipped") is not None:
+                              skipped.append(label)
+
+                      passed = len(cases) - len(failed) - len(skipped)
                       print(
                           f"- Total: **{len(cases)}**; passed: **{passed}**; "
-                          f"failed: **{len(failed)}**; skipped: **{skipped}**",
+                          f"failed: **{len(failed)}**; skipped: **{len(skipped)}**",
                           file=summary,
                       )
 
@@ -387,13 +599,38 @@ jobs:
                           print(file=summary)
                           print(f"### Failed tests ({len(failed)})", file=summary)
                           print(file=summary)
-                          for name in failed:
+                          for name, details in failed:
                               safe_name = name.replace("`", "'")
                               print(f"- `{safe_name}`", file=summary)
-                      elif cases:
+                              if details:
+                                  # Keep the summary useful without approaching
+                                  # GitHub's per-step summary size limit.
+                                  excerpt = details[-4000:]
+                                  print(file=summary)
+                                  print("  <details>", file=summary)
+                                  print("  <summary>Failure output</summary>", file=summary)
+                                  print(file=summary)
+                                  print(f"  <pre>{html.escape(excerpt)}</pre>", file=summary)
+                                  print("  </details>", file=summary)
+
+                      if skipped:
                           print(file=summary)
-                          print(f"All {len(cases)} tests passed.", file=summary)
-                      else:
+                          print(f"### Skipped tests ({len(skipped)})", file=summary)
+                          print(file=summary)
+                          for name in skipped:
+                              safe_name = name.replace("`", "'")
+                              print(f"- `{safe_name}`", file=summary)
+
+                      if cases and not failed and not skipped:
+                          print(file=summary)
+                          print(f"✅ All {len(cases)} tests passed.", file=summary)
+                      elif cases and not failed:
+                          print(file=summary)
+                          print(
+                              "No tests failed, but not every test ran to completion.",
+                              file=summary,
+                          )
+                      elif not cases:
                           print(file=summary)
                           print("CTest did not report any tests.", file=summary)
           PYTHON
@@ -415,11 +652,3 @@ jobs:
           path: ${{ runner.temp }}/cluster-test-results/
           if-no-files-found: warn
           retention-days: 14
-
-      - name: Fail job when tests or result collection fail
-        if: >-
-          ${{ always() &&
-              (steps.tests.outcome == 'failure' ||
-               steps.collect_tests.outcome == 'failure') }}
-        shell: bash
-        run: exit 1
