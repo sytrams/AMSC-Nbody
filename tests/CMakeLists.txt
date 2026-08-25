@@ -105,7 +105,8 @@ if(TARGET nbody::cuda)
         integration/cuda/radix_tree_groups_test.cu
         integration/cuda/radix_to_octree_test.cu
         integration/cuda/sparse_octree_test.cu
-        integration/cuda/octree_physics_test.cu)
+        integration/cuda/octree_physics_test.cu
+        integration/cuda/particle_octree_pipeline_test.cu)
 
     # Opt-in because memcheck is much slower than the normal suite. Configure
     # with -DNBODY_ENABLE_COMPUTE_SANITIZER_TESTS=ON, build, then run:
