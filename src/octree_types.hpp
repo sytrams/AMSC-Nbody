@@ -18,16 +18,16 @@ struct Octree
     int* firstParticle = nullptr;
     int* particleCount = nullptr;
 
-    float* mass = nullptr;
-    float* comX = nullptr;
-    float* comY = nullptr;
-    float* comZ = nullptr;
+    double* mass = nullptr;
+    double* comX = nullptr;
+    double* comY = nullptr;
+    double* comZ = nullptr;
 
     //Geometria della cella
-    float* centerX = nullptr;
-    float* centerY = nullptr;
-    float* centerZ = nullptr;
-    float* halfSize = nullptr;
+    double* centerX = nullptr;
+    double* centerY = nullptr;
+    double* centerZ = nullptr;
+    double* halfSize = nullptr;
 
     //Bottom-up synchronization
     int* pendingChildren = nullptr;

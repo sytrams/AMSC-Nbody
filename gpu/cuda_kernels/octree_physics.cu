@@ -104,7 +104,7 @@ __global__ void countOctreeChildrenKernel(Octree octree, int* errorCode)
         atomicCAS(errorCode, 0, 4);
 }
 
-__global__ void initializeOctreeLeavesKernel(Octree octree, const std::uint32_t* sortedIndices, const float* particleMass, const float* positionX, const float* positionY, const float* positionZ, int* errorCode)
+__global__ void initializeOctreeLeavesKernel(Octree octree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, int* errorCode)
 {
     const int node = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -125,10 +125,10 @@ __global__ void initializeOctreeLeavesKernel(Octree octree, const std::uint32_t*
         return;
     }
 
-    float totalMass = 0.0f;
-    float weightedX = 0.0f;
-    float weightedY = 0.0f;
-    float weightedZ = 0.0f;
+    double totalMass = 0.0f;
+    double weightedX = 0.0f;
+    double weightedY = 0.0f;
+    double weightedZ = 0.0f;
 
     for (int localParticle = 0; localParticle < count; ++localParticle)
     {
@@ -141,7 +141,7 @@ __global__ void initializeOctreeLeavesKernel(Octree octree, const std::uint32_t*
             return;
         }
 
-        const float mass = particleMass[particle];
+        const double mass = particleMass[particle];
         totalMass += mass;
         weightedX += mass * positionX[particle];
         weightedY += mass * positionY[particle];
@@ -152,7 +152,7 @@ __global__ void initializeOctreeLeavesKernel(Octree octree, const std::uint32_t*
 
     if (totalMass > 0.0f)
     {
-        const float inverseMass = 1.0f / totalMass;
+        const double inverseMass = 1.0f / totalMass;
         octree.comX[node] = weightedX * inverseMass;
         octree.comY[node] = weightedY * inverseMass;
         octree.comZ[node] = weightedZ * inverseMass;
@@ -216,10 +216,10 @@ __global__ void propagateOctreeMassKernel(Octree octree, int* errorCode)
         }
 
         //This is the last completed child, so all children of parentNode now have valid mass and CoM
-        float totalMass = 0.0f;
-        float weightedX = 0.0f;
-        float weightedY = 0.0f;
-        float weightedZ = 0.0f;
+        double totalMass = 0.0f;
+        double weightedX = 0.0f;
+        double weightedY = 0.0f;
+        double weightedZ = 0.0f;
 
         for (int octant = 0; octant < 8; ++octant)
         {
@@ -228,7 +228,7 @@ __global__ void propagateOctreeMassKernel(Octree octree, int* errorCode)
             if (child == -1)
                 continue;
 
-            const float childMass = octree.mass[child];
+            const double childMass = octree.mass[child];
             totalMass += childMass;
             weightedX += childMass * octree.comX[child];
             weightedY += childMass * octree.comY[child];
@@ -239,7 +239,7 @@ __global__ void propagateOctreeMassKernel(Octree octree, int* errorCode)
 
         if (totalMass > 0.0f)
         {
-            const float inverseMass = 1.0f / totalMass;
+            const double inverseMass = 1.0f / totalMass;
             octree.comX[parentNode] = weightedX * inverseMass;
             octree.comY[parentNode] = weightedY * inverseMass;
             octree.comZ[parentNode] = weightedZ * inverseMass;
@@ -296,7 +296,7 @@ void allocateOctreePhysicalData(Octree& octree)
     }
 }
 
-void computeOctreeMassAndCenterOfMass(Octree& octree, const std::uint32_t* d_sortedIndices, const float* d_mass, const float* d_positionX, const float* d_positionY, const float* d_positionZ)
+void computeOctreeMassAndCenterOfMass(Octree& octree, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ)
 {
     if (octree.nParticles <= 0 || octree.nLeaves <= 0 || octree.nNodes <= 0 || octree.root != 0)
         throw std::logic_error("Octree topology is not valid");
@@ -313,7 +313,7 @@ void computeOctreeMassAndCenterOfMass(Octree& octree, const std::uint32_t* d_sor
     if (d_mass == nullptr || d_positionX == nullptr || d_positionY == nullptr || d_positionZ == nullptr)
         throw std::invalid_argument("Particle arrays must not be null");
 
-    const std::size_t nodeBytes = static_cast<std::size_t>(octree.nNodes) * sizeof(float);
+    const std::size_t nodeBytes = static_cast<std::size_t>(octree.nNodes) * sizeof(double);
 
     checkCuda(cudaMemset(octree.mass, 0, nodeBytes), "clear octree.mass");
     checkCuda(cudaMemset(octree.comX, 0, nodeBytes), "clear octree.comX");
