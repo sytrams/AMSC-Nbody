@@ -3,7 +3,6 @@
 - `unit/cpu`: fast tests for host-only code.
 - `unit/cuda`: focused CUDA component tests.
 - `integration/cuda`: tests spanning multiple CUDA tree stages.
-- `integration/metal`: reserved for headless Metal integration tests.
 - `support`: fixtures and helpers shared by test sources.
 - `data`: only small, deterministic fixtures.
 - `scripts`: explicit slow or diagnostic test runners.

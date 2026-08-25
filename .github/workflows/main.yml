@@ -1,23 +1,15 @@
-name: NVIDIA cluster GoogleTests
+name: VPN SSH operation
 
 on:
   push:
     branches:
       - main
       - codex/automation-test
-  workflow_dispatch:
-
-permissions:
-  contents: read
-
-concurrency:
-  group: cluster-tests-${{ github.ref }}
-  cancel-in-progress: true
 
 jobs:
-  cluster-tests:
+  connect:
     runs-on: ubuntu-24.04
-    timeout-minutes: 120
+    timeout-minutes: 90
 
     steps:
       - name: Check out repository
@@ -56,9 +48,9 @@ jobs:
             sudo apt-get "${APT_OPTIONS[@]}" update
           timeout --signal=INT --kill-after=10s 4m \
             sudo apt-get "${APT_OPTIONS[@]}" install -y \
-              software-properties-common \
-              netcat-openbsd \
-              openssh-client
+            software-properties-common \
+            netcat-openbsd \
+            openssh-client
 
           timeout --signal=INT --kill-after=10s 90s \
             sudo add-apt-repository \
@@ -75,61 +67,7 @@ jobs:
           command -v gpauth
           gpclient --version
 
-      - name: Install Apptainer builder
-        timeout-minutes: 10
-        shell: bash
-        run: |
-          set -euxo pipefail
-          export DEBIAN_FRONTEND=noninteractive
-
-          sudo add-apt-repository --yes ppa:apptainer/ppa
-          sudo apt-get update
-          sudo apt-get install --yes apptainer
-
-          apptainer version
-
-      - name: Build NVIDIA test container
-        id: container
-        timeout-minutes: 30
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          image_path="$RUNNER_TEMP/nbody-tests.sif"
-          cache_path="$RUNNER_TEMP/apptainer-cache"
-          temporary_path="$RUNNER_TEMP/apptainer-tmp"
-          mkdir -p "$cache_path" "$temporary_path"
-
-          sudo env \
-            APPTAINER_CACHEDIR="$cache_path" \
-            APPTAINER_TMPDIR="$temporary_path" \
-            apptainer build \
-              --force \
-              "$image_path" \
-              containers/nbody-tests.def
-          sudo chown "$(id -u):$(id -g)" "$image_path"
-
-          test -s "$image_path"
-          apptainer inspect "$image_path"
-          echo "image=$image_path" >> "$GITHUB_OUTPUT"
-          echo "image_bytes=$(stat --format=%s "$image_path")" >> "$GITHUB_OUTPUT"
-
-      - name: Package tracked source
-        id: bundle
-        shell: bash
-        run: |
-          set -euxo pipefail
-
-          archive_path="$RUNNER_TEMP/amsc-nbody-${GITHUB_SHA}.tar.gz"
-          git archive \
-            --format=tar.gz \
-            --output="$archive_path" \
-            "$GITHUB_SHA"
-
-          test -s "$archive_path"
-          echo "archive=$archive_path" >> "$GITHUB_OUTPUT"
-
-      - name: Configure cluster SSH credential
+      - name: Configure CINECA SSH credential
         shell: bash
         env:
           SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -137,11 +75,11 @@ jobs:
           SSH_KNOWN_HOSTS: ${{ secrets.SSH_KNOWN_HOSTS }}
         run: |
           install -m 700 -d ~/.ssh
-          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/cluster
-          printf '%s\n' "$SSH_CERTIFICATE" > ~/.ssh/cluster-cert.pub
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/cineca
+          printf '%s\n' "$SSH_CERTIFICATE" > ~/.ssh/cineca-cert.pub
           printf '%s\n' "$SSH_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          chmod 600 ~/.ssh/cluster ~/.ssh/known_hosts
-          chmod 644 ~/.ssh/cluster-cert.pub
+          chmod 600 ~/.ssh/cineca ~/.ssh/known_hosts
+          chmod 644 ~/.ssh/cineca-cert.pub
 
       - name: Install Python and browser dependencies
         shell: bash
@@ -149,37 +87,24 @@ jobs:
           set -euxo pipefail
 
           python -m pip install -r requirements.txt
+
           python -m playwright install --with-deps chromium
 
       - name: Authenticate and keep VPN connected
         id: vpn
+        background: true
         shell: bash
         env:
-          POLIMI_USERNAME: ${{ secrets.POLIMI_USER }}
-          POLIMI_PASSWORD: ${{ secrets.POLIMI_PASSWORD }}
-          POLIMI_TOTP: ${{ secrets.POLIMI_TOTP }}
-          POLIMI_VPN: ${{ secrets.POLIMI_VPN }}
+          POLIMI_USERNAME: ${{secrets.POLIMI_USER}}
+          POLIMI_PASSWORD: ${{secrets.POLIMI_PASSWORD}}
+          POLIMI_TOTP: ${{secrets.POLIMI_TOTP}}
+          POLIMI_VPN: ${{secrets.POLIMI_VPN}}
           VPN_READY_FILE: ${{ runner.temp }}/vpn-ready
           VPN_FAILED_FILE: ${{ runner.temp }}/vpn-failed
           VPN_DIAGNOSTICS_DIR: ${{ runner.temp }}/vpn-auth-diagnostics
-          VPN_PID_FILE: ${{ runner.temp }}/vpn-auth.pid
-          VPN_LOG_FILE: ${{ runner.temp }}/vpn-auth-diagnostics/vpn.log
           PYTHONUNBUFFERED: "1"
         run: |
-          set -euo pipefail
-
-          mkdir -p "$VPN_DIAGNOSTICS_DIR"
-          nohup python3 vpn_remote_auth.py \
-            > "$VPN_LOG_FILE" \
-            2>&1 &
-          vpn_pid=$!
-          echo "$vpn_pid" > "$VPN_PID_FILE"
-
-          sleep 1
-          if ! kill -0 "$vpn_pid" 2>/dev/null; then
-            cat "$VPN_LOG_FILE"
-            exit 1
-          fi
+          exec python3 vpn_remote_auth.py
 
       - name: Wait for VPN readiness
         id: vpn_wait
@@ -195,14 +120,6 @@ jobs:
               exit 1
             fi
 
-            if test -f "$RUNNER_TEMP/vpn-auth.pid"; then
-              vpn_pid=$(<"$RUNNER_TEMP/vpn-auth.pid")
-              if ! kill -0 "$vpn_pid" 2>/dev/null; then
-                cat "$RUNNER_TEMP/vpn-auth-diagnostics/vpn.log"
-                exit 1
-              fi
-            fi
-
             sleep 1
           done
 
@@ -213,7 +130,7 @@ jobs:
         id: ssh
         timeout-minutes: 1
         run: |
-          ssh -T -i ~/.ssh/cluster \
+          ssh -T -i ~/.ssh/cineca \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
@@ -223,195 +140,19 @@ jobs:
             "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}" \
             true
 
-      - name: Deploy source and test container
-        id: deploy
-        timeout-minutes: 20
-        shell: bash
-        env:
-          ARCHIVE_PATH: ${{ steps.bundle.outputs.archive }}
-          IMAGE_PATH: ${{ steps.container.outputs.image }}
-          IMAGE_BYTES: ${{ steps.container.outputs.image_bytes }}
-          CLUSTER_PROJECT_ROOT: ${{ vars.CLUSTER_PROJECT_ROOT }}
-        run: |
-          set -euxo pipefail
-
-          if [[ -n "$CLUSTER_PROJECT_ROOT" && ! "$CLUSTER_PROJECT_ROOT" =~ ^[A-Za-z0-9_./-]+$ ]]; then
-            echo "CLUSTER_PROJECT_ROOT contains unsupported characters" >&2
-            exit 1
-          fi
-
-          if [[ ! "$IMAGE_BYTES" =~ ^[1-9][0-9]*$ ]]; then
-            echo "Container image size is invalid: $IMAGE_BYTES" >&2
-            exit 1
-          fi
-
-          target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
-          ssh_options=(
-            -i ~/.ssh/cluster
-            -o BatchMode=yes
-            -o IdentitiesOnly=yes
-            -o StrictHostKeyChecking=yes
-            -o NumberOfPasswordPrompts=0
-            -o ConnectTimeout=30
-            -o ConnectionAttempts=2
-          )
-
-          printf -v layout_arguments '%q ' \
-            "$CLUSTER_PROJECT_ROOT" \
-            "$GITHUB_SHA" \
-            "$IMAGE_BYTES"
-          release_dir="$(
-            ssh "${ssh_options[@]}" "$target" \
-              "bash -s -- $layout_arguments" <<'REMOTE_LAYOUT'
-          set -euo pipefail
-
-          requested_root="$1"
-          commit_sha="$2"
-          image_bytes="$3"
-          required_kib=$(( (image_bytes + 1023) / 1024 + 524288 ))
-          candidates=()
-
-          if [[ -n "$requested_root" ]]; then
-            candidates+=("$requested_root")
-          else
-            [[ -n "${SCRATCH:-}" ]] && candidates+=("${SCRATCH%/}/AMSC-Nbody-ci")
-            [[ -n "${WORK:-}" ]] && candidates+=("${WORK%/}/AMSC-Nbody-ci")
-            candidates+=("${HOME%/}/AMSC-Nbody-ci")
-          fi
-
-          release_dir=""
-          for candidate in "${candidates[@]}"; do
-            releases_root="${candidate%/}/releases"
-            if [[ -d "$releases_root" ]]; then
-              shopt -s nullglob
-              for stale_release in "$releases_root"/*; do
-                [[ -d "$stale_release" ]] || continue
-                [[ -e "$stale_release/.deployment-complete" ]] && continue
-
-                stale_artifacts=(
-                  "$stale_release/source.tar.gz"
-                  "$stale_release/nbody-tests.sif"
-                  "$stale_release"/.nbody-tests-*.sif.part
-                )
-                reclaimed_bytes=0
-                for stale_artifact in "${stale_artifacts[@]}"; do
-                  [[ -f "$stale_artifact" ]] || continue
-                  artifact_bytes="$(stat --format=%s "$stale_artifact" 2>/dev/null || echo 0)"
-                  rm -f -- "$stale_artifact"
-                  reclaimed_bytes=$((reclaimed_bytes + artifact_bytes))
-                done
-
-                if (( reclaimed_bytes > 0 )); then
-                  printf 'Removed %s bytes of incomplete automation artifacts from %s\n' \
-                    "$reclaimed_bytes" \
-                    "$stale_release" >&2
-                fi
-                rmdir "$stale_release" 2>/dev/null || true
-              done
-              shopt -u nullglob
-            fi
-
-            candidate_release="${candidate%/}/releases/$commit_sha"
-            if ! mkdir -p "$candidate_release" 2>/dev/null; then
-              printf 'Cluster storage is not writable: %s\n' "$candidate" >&2
-              continue
-            fi
-
-            candidate="$(cd "$candidate" && pwd -P)"
-            available_kib="$(df -Pk "$candidate" | awk 'NR == 2 { print $4 }')"
-            if [[ "$available_kib" =~ ^[0-9]+$ ]] && (( available_kib >= required_kib )); then
-              release_dir="${candidate%/}/releases/$commit_sha"
-              printf 'Using cluster storage %s (%s KiB available)\n' \
-                "$candidate" \
-                "$available_kib" >&2
-              break
-            fi
-
-            printf 'Cluster storage has insufficient space: %s (%s KiB available, %s KiB required)\n' \
-              "$candidate" \
-              "${available_kib:-unknown}" \
-              "$required_kib" >&2
-          done
-
-          if [[ -z "$release_dir" ]]; then
-            echo "No cluster filesystem has enough room for the test container." >&2
-            echo "Set CLUSTER_PROJECT_ROOT to a shared scratch or work filesystem." >&2
-            exit 1
-          fi
-
-          printf '%s\n' "$release_dir"
-          REMOTE_LAYOUT
-          )"
-
-          remote_archive="$release_dir/source.tar.gz"
-          remote_image="$release_dir/.nbody-tests-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sif.part"
-          cleanup_remote_upload() {
-            ssh "${ssh_options[@]}" "$target" \
-              "rm -f '$remote_image'" || true
-          }
-          trap cleanup_remote_upload ERR INT TERM
-
-          scp "${ssh_options[@]}" \
-            "$ARCHIVE_PATH" \
-            "$target:$remote_archive"
-          scp "${ssh_options[@]}" \
-            "$IMAGE_PATH" \
-            "$target:$remote_image"
-          ssh "${ssh_options[@]}" "$target" \
-            "mv '$remote_image' '$release_dir/nbody-tests.sif' && tar -xzf '$remote_archive' -C '$release_dir' && touch '$release_dir/.deployment-complete'"
-
-          trap - ERR INT TERM
-
-          echo "release=$release_dir" >> "$GITHUB_OUTPUT"
-
-      - name: Submit and wait for OpenPBS GPU GoogleTests
-        id: cluster_test
+      - name: Run tests on a PBS GPU node
+        id: tests
         timeout-minutes: 60
         shell: bash
         env:
-          RELEASE_DIR: ${{ steps.deploy.outputs.release }}
-          CONTAINER_RUNTIME: ${{ vars.CLUSTER_CONTAINER_RUNTIME || 'apptainer' }}
-          CONTAINER_MODULE: ${{ vars.CLUSTER_CONTAINER_MODULE }}
-          CUDA_ARCHITECTURES: ${{ vars.CUDA_ARCHITECTURES || '89' }}
-          PBS_QUEUE: ${{ vars.PBS_QUEUE || 'gpu' }}
-          PBS_NCPUS: ${{ vars.PBS_NCPUS || '2' }}
-          PBS_WALLTIME: ${{ vars.PBS_WALLTIME || '00:30:00' }}
           RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          set -euxo pipefail
-
-          for value in \
-            "$RELEASE_DIR" \
-            "$CONTAINER_RUNTIME" \
-            "$CONTAINER_MODULE" \
-            "$CUDA_ARCHITECTURES" \
-            "$PBS_QUEUE" \
-            "$PBS_WALLTIME" \
-            "$RUN_KEY"; do
-            if [[ ! "$value" =~ ^[A-Za-z0-9_./\;+:=-]*$ ]]; then
-              echo "A cluster configuration value contains unsupported characters" >&2
-              exit 1
-            fi
-          done
-
-          if [[ "$CONTAINER_RUNTIME" != "singularity" && "$CONTAINER_RUNTIME" != "apptainer" ]]; then
-            echo "CLUSTER_CONTAINER_RUNTIME must be singularity or apptainer" >&2
-            exit 1
-          fi
-
-          if [[ ! "$PBS_NCPUS" =~ ^[1-9][0-9]*$ ]]; then
-            echo "PBS_NCPUS must be a positive integer" >&2
-            exit 1
-          fi
-
-          if [[ ! "$PBS_WALLTIME" =~ ^[0-9]{2,3}:[0-5][0-9]:[0-5][0-9]$ ]]; then
-            echo "PBS_WALLTIME must use HH:MM:SS format" >&2
-            exit 1
-          fi
+          set -euo pipefail
 
           target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
           ssh_options=(
-            -i ~/.ssh/cluster
+            -T
+            -i ~/.ssh/cineca
             -o BatchMode=yes
             -o IdentitiesOnly=yes
             -o StrictHostKeyChecking=yes
@@ -419,79 +160,122 @@ jobs:
             -o ConnectTimeout=30
             -o ConnectionAttempts=2
           )
-          printf -v remote_arguments '%q ' \
-            "$RELEASE_DIR" \
-            "$CONTAINER_RUNTIME" \
-            "$CONTAINER_MODULE" \
-            "$CUDA_ARCHITECTURES" \
-            "$PBS_QUEUE" \
-            "$PBS_NCPUS" \
-            "$PBS_WALLTIME" \
-            "$RUN_KEY"
+          printf -v remote_arguments '%q ' "$RUN_KEY"
 
+          results_path="$RUNNER_TEMP/cluster-test-results"
+          mkdir -p "$results_path"
+
+          set +e
+          {
           ssh "${ssh_options[@]}" "$target" \
-            "bash -s -- $remote_arguments" <<'REMOTE_SCRIPT'
+            "bash -l -s -- $remote_arguments" <<'REMOTE_SCRIPT'
           set -euo pipefail
 
-          release_dir="$1"
-          container_runtime="$2"
-          container_module="$3"
-          cuda_architectures="$4"
-          pbs_queue="$5"
-          pbs_ncpus="$6"
-          pbs_walltime="$7"
-          run_key="$8"
-
-          cd "$release_dir"
-          release_dir="$PWD"
-          results_dir="$release_dir/ci-results/$run_key"
+          run_key="$1"
+          repository="$HOME/AMSC-Nbody-fresh"
+          results_dir="$repository/.ci-results/$run_key"
           mkdir -p "$results_dir"
+
+          cd "$repository"
+          git pull --ff-only
 
           if [[ -r /etc/profile.d/pbs.sh ]]; then
             set +u
             source /etc/profile.d/pbs.sh
             set -u
           fi
-          command -v qsub
-          command -v qstat
-          command -v qdel
-          qstat -Qf "$pbs_queue" >/dev/null
 
-          requested_resources="select=1:ncpus=${pbs_ncpus}:ngpus=1"
-          job_environment="NBODY_SOURCE_DIR=$release_dir"
-          job_environment+=",NBODY_IMAGE=$release_dir/nbody-tests.sif"
-          job_environment+=",NBODY_TEST_MODE=all"
-          job_environment+=",NBODY_RESULTS_DIR=$results_dir"
-          job_environment+=",NBODY_CONTAINER_RUNTIME=$container_runtime"
-          job_environment+=",NBODY_CONTAINER_MODULE=$container_module"
-          job_environment+=",NBODY_CUDA_ARCHITECTURES=$cuda_architectures"
-          job_environment+=",NBODY_JOBS=$pbs_ncpus"
-
-          job_id=""
-          cleanup_remote_job() {
-            if [[ -n "$job_id" ]] && qstat "$job_id" >/dev/null 2>&1; then
-              qdel "$job_id" || true
+          for required_command in qsub qstat; do
+            if ! command_path="$(command -v "$required_command")"; then
+              echo "Required cluster command is unavailable: $required_command" >&2
+              echo "Remote PATH: $PATH" >&2
+              exit 127
             fi
-          }
-          trap cleanup_remote_job EXIT INT TERM
+            printf 'Using %s: %s\n' "$required_command" "$command_path"
+          done
 
+          job_environment="NBODY_REPOSITORY=$repository"
+          job_environment+=",NBODY_RESULTS_DIR=$results_dir"
           job_id="$(
             qsub \
-              -q "$pbs_queue" \
-              -l "$requested_resources" \
-              -l "walltime=$pbs_walltime" \
-              -N amsc-nbody-test \
+              -q gpu \
+              -l walltime=00:30:00 \
+              -N amsc-nbody-tests \
               -j oe \
               -o "$results_dir/pbs-job.out" \
-              -v "$job_environment" \
-              containers/openpbs-google-tests.pbs
+              -v "$job_environment" <<'PBS_SCRIPT'
+          #!/usr/bin/env bash
+          set -Eeuo pipefail
+
+          record_exit_status() {
+            status=$?
+            set +e
+            printf '%s\n' "$status" > "$NBODY_RESULTS_DIR/test-exit-code"
+          }
+          trap record_exit_status EXIT
+
+          if ! command -v apptainer >/dev/null 2>&1; then
+            echo "Required compute-node command is unavailable: apptainer" >&2
+            echo "Compute-node PATH: $PATH" >&2
+            exit 127
+          fi
+
+          apptainer exec \
+            --nv \
+            --bind "$NBODY_REPOSITORY:$NBODY_REPOSITORY" \
+            --bind "$NBODY_RESULTS_DIR:$NBODY_RESULTS_DIR" \
+            /software/containers/nvhpc/nvhpc.sif \
+            bash -se -- "$NBODY_REPOSITORY" "$NBODY_RESULTS_DIR" <<'CONTAINER_SCRIPT'
+          set -Eeuo pipefail
+
+          repository="$1"
+          results_dir="$2"
+
+          nvcc /software/containers/nvhpc/saxpy.cu \
+            -DNDEBUG -O4 \
+            -DTHRUST_DEVICE_SYSTEM=THRUST_DEVICE_SYSTEM_CPP \
+            -o "$results_dir/saxpy.cpu"
+          nvcc /software/containers/nvhpc/saxpy.cu \
+            -arch=sm_89 -DNDEBUG -O4 \
+            -o "$results_dir/saxpy.gpu"
+          "$results_dir/saxpy.cpu"
+          "$results_dir/saxpy.gpu"
+
+          cd "$repository"
+          cmake -S . -B build/all-tests \
+            -DBUILD_TESTING=ON \
+            -DNBODY_ENABLE_CUDA=ON \
+            -DNBODY_BUILD_VIEWER=OFF
+          cmake --build build/all-tests --parallel
+
+          set +e
+          ctest \
+            --test-dir build/all-tests \
+            --output-on-failure \
+            --no-tests=error \
+            --output-junit "$results_dir/ctest-results.xml" \
+            2>&1 | tee "$results_dir/ctest-output.log"
+          ctest_status=${PIPESTATUS[0]}
+          set -e
+
+          if (( ctest_status != 0 )); then
+            exit "$ctest_status"
+          fi
+
+          # A skipped CUDA test on an allocated GPU node means the requested
+          # suite did not fully execute, so treat it as an automation failure.
+          if grep -q '<skipped' "$results_dir/ctest-results.xml"; then
+            echo "CTest reported one or more skipped tests" >&2
+            exit 1
+          fi
+          CONTAINER_SCRIPT
+          PBS_SCRIPT
           )"
-          printf 'Submitted OpenPBS GPU job %s with %s\n' \
-            "$job_id" \
-            "$requested_resources" | tee "$results_dir/pbs-submission.txt"
+
+          printf 'Submitted PBS job %s\n' "$job_id"
 
           job_finished=false
-          for attempt in {1..360}; do
+          for attempt in {1..330}; do
             job_state="$(
               qstat -f "$job_id" 2>/dev/null \
                 | awk '$1 == "job_state" { print $3; exit }' \
@@ -509,97 +293,193 @@ jobs:
           done
 
           if [[ "$job_finished" != true ]]; then
-            echo "Timed out waiting for OpenPBS GPU job $job_id" >&2
+            echo "Timed out waiting for PBS job $job_id" >&2
             exit 1
           fi
 
           for attempt in {1..12}; do
-            [[ -s "$results_dir/pbs-exit-code" ]] && break
+            [[ -s "$results_dir/test-exit-code" ]] && break
             sleep 5
           done
 
-          if [[ ! -s "$results_dir/pbs-exit-code" ]]; then
-            echo "OpenPBS job $job_id completed without an exit-code file" >&2
+          if [[ -f "$results_dir/pbs-job.out" ]]; then
+            cat "$results_dir/pbs-job.out"
+          fi
+
+          if [[ ! -s "$results_dir/test-exit-code" ]]; then
+            echo "PBS job $job_id did not produce a test exit code" >&2
             exit 1
           fi
 
-          job_exit_code="$(<"$results_dir/pbs-exit-code")"
-          if [[ ! "$job_exit_code" =~ ^[0-9]+$ ]]; then
-            echo "Invalid OpenPBS job exit code: $job_exit_code" >&2
+          test_exit_code="$(<"$results_dir/test-exit-code")"
+          if [[ ! "$test_exit_code" =~ ^[0-9]+$ ]]; then
+            echo "Invalid test exit code: $test_exit_code" >&2
             exit 1
           fi
 
-          job_id=""
-          trap - EXIT INT TERM
-          exit "$job_exit_code"
+          exit "$test_exit_code"
           REMOTE_SCRIPT
+          } 2>&1 | tee "$results_path/orchestration.log"
+          test_status=${PIPESTATUS[0]}
+          set -e
+          exit "$test_status"
 
-      - name: Download cluster test results
-        id: collect
-        if: ${{ always() && steps.deploy.outcome == 'success' }}
+      - name: Download test results
+        id: collect_tests
+        if: ${{ always() && steps.tests.outcome != 'skipped' }}
         timeout-minutes: 10
         shell: bash
         env:
-          RELEASE_DIR: ${{ steps.deploy.outputs.release }}
           RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
-          set -euxo pipefail
+          set -euo pipefail
 
-          target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
           results_path="$RUNNER_TEMP/cluster-test-results"
           mkdir -p "$results_path"
-
           scp \
             -r \
-            -i ~/.ssh/cluster \
+            -i ~/.ssh/cineca \
             -o BatchMode=yes \
             -o IdentitiesOnly=yes \
             -o StrictHostKeyChecking=yes \
             -o NumberOfPasswordPrompts=0 \
             -o ConnectTimeout=30 \
             -o ConnectionAttempts=2 \
-            "$target:$RELEASE_DIR/ci-results/$RUN_KEY/." \
+            "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}:AMSC-Nbody-fresh/.ci-results/$RUN_KEY/." \
             "$results_path/"
 
       - name: Stop VPN
+        cancel: vpn
+
+      - name: Emergency VPN cleanup
         if: always()
         shell: bash
-        run: |
-          set +e
+        run: sudo -n gpclient disconnect || true
 
-          if test -f "$RUNNER_TEMP/vpn-auth.pid"; then
-            vpn_pid=$(<"$RUNNER_TEMP/vpn-auth.pid")
-            if kill -0 "$vpn_pid" 2>/dev/null; then
-              kill -TERM "$vpn_pid"
-              for attempt in {1..30}; do
-                kill -0 "$vpn_pid" 2>/dev/null || break
-                sleep 1
-              done
-              kill -KILL "$vpn_pid" 2>/dev/null || true
-            fi
-          fi
-
-          sudo -n gpclient disconnect || true
-
-      - name: Write cluster test summary
+      - name: Write automation summary
         if: ${{ always() }}
         shell: bash
         run: |
           {
-            echo "## NVIDIA cluster GoogleTests"
+            echo "## VPN authentication and connectivity"
             echo
-            echo "- Container build: \`${{ steps.container.outcome }}\`"
-            echo "- VPN startup: \`${{ steps.vpn.outcome }}\`"
-            echo "- VPN readiness: \`${{ steps.vpn_wait.outcome }}\`"
-            echo "- SSH connectivity: \`${{ steps.ssh.outcome }}\`"
-            echo "- Cluster deployment: \`${{ steps.deploy.outcome }}\`"
-            echo "- OpenPBS GPU GoogleTests: \`${{ steps.cluster_test.outcome }}\`"
-            echo "- Result collection: \`${{ steps.collect.outcome }}\`"
+            echo "- VPN background process: \`${{ steps.vpn.outcome }}\`"
+            echo "- VPN readiness check: \`${{ steps.vpn_wait.outcome }}\`"
+            echo "- SSH connectivity check: \`${{ steps.ssh.outcome }}\`"
+            echo "- PBS GPU tests: \`${{ steps.tests.outcome }}\`"
+            echo "- Test-result collection: \`${{ steps.collect_tests.outcome }}\`"
             if test -f "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"; then
               echo
               cat "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"
             fi
           } >> "$GITHUB_STEP_SUMMARY"
+
+          python3 <<'PYTHON'
+          import os
+          import html
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          summary_path = Path(os.environ["GITHUB_STEP_SUMMARY"])
+          results_path = Path(os.environ["RUNNER_TEMP"]) / "cluster-test-results"
+          junit_path = results_path / "ctest-results.xml"
+          orchestration_log = results_path / "orchestration.log"
+
+          with summary_path.open("a", encoding="utf-8") as summary:
+              print(file=summary)
+              print("## Test results", file=summary)
+              print(file=summary)
+
+              if not junit_path.is_file():
+                  print(
+                      "Test results are unavailable. Check the Run tests step "
+                      "and, when present, the cluster-test-results artifact.",
+                      file=summary,
+                  )
+                  if orchestration_log.is_file():
+                      lines = orchestration_log.read_text(
+                          encoding="utf-8", errors="replace"
+                      ).splitlines()
+                      if lines:
+                          print(file=summary)
+                          print("### Last orchestration messages", file=summary)
+                          print(file=summary)
+                          for line in lines[-20:]:
+                              print(f"    {line}", file=summary)
+              else:
+                  try:
+                      root = ET.parse(junit_path).getroot()
+                  except (ET.ParseError, OSError) as error:
+                      print(f"CTest result XML could not be read: `{error}`", file=summary)
+                  else:
+                      cases = list(root.iter("testcase"))
+                      failed = []
+                      skipped = []
+
+                      for case in cases:
+                          failure = case.find("failure")
+                          error = case.find("error")
+                          suite = case.get("classname", "").strip()
+                          name = case.get("name", "unnamed test").strip()
+                          label = f"{suite}.{name}" if suite else name
+
+                          problem = failure if failure is not None else error
+                          if problem is not None:
+                              message = (problem.get("message") or "").strip()
+                              output = (problem.text or "").strip()
+                              details = "\n".join(
+                                  part for part in (message, output) if part
+                              )
+                              failed.append((label, details))
+                          elif case.find("skipped") is not None:
+                              skipped.append(label)
+
+                      passed = len(cases) - len(failed) - len(skipped)
+                      print(
+                          f"- Total: **{len(cases)}**; passed: **{passed}**; "
+                          f"failed: **{len(failed)}**; skipped: **{len(skipped)}**",
+                          file=summary,
+                      )
+
+                      if failed:
+                          print(file=summary)
+                          print(f"### Failed tests ({len(failed)})", file=summary)
+                          print(file=summary)
+                          for name, details in failed:
+                              safe_name = name.replace("`", "'")
+                              print(f"- `{safe_name}`", file=summary)
+                              if details:
+                                  # Keep the summary useful without approaching
+                                  # GitHub's per-step summary size limit.
+                                  excerpt = details[-4000:]
+                                  print(file=summary)
+                                  print("  <details>", file=summary)
+                                  print("  <summary>Failure output</summary>", file=summary)
+                                  print(file=summary)
+                                  print(f"  <pre>{html.escape(excerpt)}</pre>", file=summary)
+                                  print("  </details>", file=summary)
+
+                      if skipped:
+                          print(file=summary)
+                          print(f"### Skipped tests ({len(skipped)})", file=summary)
+                          print(file=summary)
+                          for name in skipped:
+                              safe_name = name.replace("`", "'")
+                              print(f"- `{safe_name}`", file=summary)
+
+                      if cases and not failed and not skipped:
+                          print(file=summary)
+                          print(f"✅ All {len(cases)} tests passed.", file=summary)
+                      elif cases and not failed:
+                          print(file=summary)
+                          print(
+                              "No tests failed, but not every test ran to completion.",
+                              file=summary,
+                          )
+                      elif not cases:
+                          print(file=summary)
+                          print("CTest did not report any tests.", file=summary)
+          PYTHON
 
       - name: Upload VPN authentication diagnostics
         if: ${{ failure() && steps.vpn_wait.outcome == 'failure' }}
@@ -611,7 +491,7 @@ jobs:
           retention-days: 3
 
       - name: Upload cluster test results
-        if: ${{ always() && steps.collect.outcome == 'success' }}
+        if: ${{ always() && steps.tests.outcome != 'skipped' }}
         uses: actions/upload-artifact@v4
         with:
           name: cluster-test-results-${{ github.sha }}-${{ github.run_attempt }}

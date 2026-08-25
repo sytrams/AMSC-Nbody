@@ -336,14 +336,12 @@ def redact_sensitive_values(text: str, secrets: tuple[str, ...]) -> str:
     sanitized = UUID_PATTERN.sub("[identifier redacted]", sanitized)
 
     def redact_url(match: re.Match[str]) -> str:
-        candidate = match.group(0).rstrip(".,;")
+        parsed = urlsplit(match.group(0).rstrip(".,;"))
+        hostname = parsed.hostname or "host"
         try:
-            parsed = urlsplit(candidate)
-            hostname = parsed.hostname or "host"
             port = f":{parsed.port}" if parsed.port is not None else ""
         except ValueError:
-            scheme = candidate.partition(":")[0].lower()
-            return f"{scheme}://host/[url redacted]"
+            port = ""
         return f"{parsed.scheme}://{hostname}{port}/[url redacted]"
 
     sanitized = HTTP_URL_PATTERN.sub(redact_url, sanitized)

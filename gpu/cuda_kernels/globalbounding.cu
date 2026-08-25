@@ -1,80 +1,143 @@
 #include "globalbounding.hpp"
-#include <thrust/device_vector.h>
-#include <thrust/transform_reduce.h>
-#include <thrust/zip_iterator.h>
-#include <thrust/tuple.h>
-#include <thrust/execution_policy.h>
+
+#include <algorithm>
+#include <array>
 #include <cmath>
+#include <limits>
+#include <stdexcept>
 
-struct BBox {
-    double min_x, max_x;
-    double min_y, max_y;
-    double min_z, max_z;
+#include <thrust/copy.h>
+#include <thrust/device_ptr.h>
+#include <thrust/execution_policy.h>
+#include <thrust/iterator/counting_iterator.h>
+#include <thrust/transform_reduce.h>
 
-    __host__ __device__
-    BBox() : min_x(INFINITY), max_x(-INFINITY),
-             min_y(INFINITY), max_y(-INFINITY),
-             min_z(INFINITY), max_z(-INFINITY) {}
+namespace {
 
-    __host__ __device__
-    BBox(double x, double y, double z) : min_x(x), max_x(x),
-                                         min_y(y), max_y(y),
-                                         min_z(z), max_z(z) {}
+// Intermediate state for the device reduction.  In addition to the extrema,
+// carry an error flag so invalid coordinates cannot be hidden by fmin/fmax.
+struct Bounds {
+  double xmin, xmax;
+  double ymin, ymax;
+  double zmin, zmax;
+  bool contains_non_finite;
 };
 
-struct BBoxReduction {
-    __host__ __device__
-    BBox operator()(const BBox& a, const BBox& b) const {
-        BBox res;
-        res.min_x = fmin(a.min_x, b.min_x);
-        res.max_x = fmax(a.max_x, b.max_x);
-        res.min_y = fmin(a.min_y, b.min_y);
-        res.max_y = fmax(a.max_y, b.max_y);
-        res.min_z = fmin(a.min_z, b.min_z);
-        res.max_z = fmax(a.max_z, b.max_z);
-        return res;
-    }
+struct ParticleToBounds {
+  const double *x;
+  const double *y;
+  const double *z;
+
+  __host__ __device__ Bounds operator()(std::size_t index) const {
+    // Represent one particle as a zero-volume axis-aligned bounding box.
+    const double x_value = x[index];
+    const double y_value = y[index];
+    const double z_value = z[index];
+    const bool finite =
+        ::isfinite(x_value) && ::isfinite(y_value) && ::isfinite(z_value);
+
+    return {x_value, x_value, y_value, y_value, z_value, z_value, !finite};
+  }
 };
 
-struct TupleToBBox {
-    __host__ __device__
-    BBox operator()(const thrust::tuple<double, double, double>& t) const {
-        return BBox(thrust::get<0>(t), thrust::get<1>(t), thrust::get<2>(t));
-    }
+struct CombineBounds {
+  __host__ __device__ Bounds operator()(const Bounds &a,
+                                        const Bounds &b) const {
+    // Component-wise min/max makes this operation associative, allowing
+    // Thrust to combine partial results in any order on the GPU.
+    return {::fmin(a.xmin, b.xmin),
+            ::fmax(a.xmax, b.xmax),
+            ::fmin(a.ymin, b.ymin),
+            ::fmax(a.ymax, b.ymax),
+            ::fmin(a.zmin, b.zmin),
+            ::fmax(a.zmax, b.zmax),
+            a.contains_non_finite || b.contains_non_finite};
+  }
 };
 
-void gpu_compute_boundaries(const std::unique_ptr<double[]>& x, const std::unique_ptr<double[]>& y, const std::unique_ptr<double[]>& z, const int N, minmax* results){
-    if (N <= 0) return;
+} // namespace
 
-    // Allocate device memory and copy data
-    thrust::device_vector<double> d_x(x.get(), x.get() + N);
-    thrust::device_vector<double> d_y(y.get(), y.get() + N);
-    thrust::device_vector<double> d_z(z.get(), z.get() + N);
+Bbox::Bbox() : centre_and_side_(value_count, 0.0) {
+  // A negative side marks a default-constructed box as not yet computed.
+  centre_and_side_[3] = -1.0;
+}
 
-    // Create zip iterator to process x, y, z together
-    auto begin = thrust::make_zip_iterator(thrust::make_tuple(d_x.begin(), d_y.begin(), d_z.begin()));
-    auto end = thrust::make_zip_iterator(thrust::make_tuple(d_x.end(), d_y.end(), d_z.end()));
+Bbox::Bbox(const double *d_x, const double *d_y, const double *d_z,
+           std::size_t count)
+    : centre_and_side_(value_count, 0.0) {
+  compute_box(d_x, d_y, d_z, count);
+}
 
-    // Perform reduction
-    BBox result = thrust::transform_reduce(
-        thrust::device,
-        begin,
-        end,
-        TupleToBBox(),
-        BBox(),
-        BBoxReduction()
-    );
+void Bbox::recompute(const double *d_x, const double *d_y, const double *d_z,
+                     std::size_t count) {
+  compute_box(d_x, d_y, d_z, count);
+}
 
-    // Allocate results if needed
-    if (!results->min) results->min = std::make_unique<double[]>(3);
-    if (!results->max) results->max = std::make_unique<double[]>(3);
+BboxValues Bbox::values() const {
+  // The canonical values live on the device; copy the four-element layout to
+  // the host before exposing it as a named aggregate.
+  std::array<double, value_count> host_values{};
+  thrust::copy(centre_and_side_.cbegin(), centre_and_side_.cend(),
+               host_values.begin());
 
-    // Store back to host
-    results->min[0] = result.min_x;
-    results->min[1] = result.min_y;
-    results->min[2] = result.min_z;
+  return {host_values[0], host_values[1], host_values[2], host_values[3]};
+}
 
-    results->max[0] = result.max_x;
-    results->max[1] = result.max_y;
-    results->max[2] = result.max_z;
+const double *Bbox::device_data() const noexcept {
+  return thrust::raw_pointer_cast(centre_and_side_.data());
+}
+
+double *Bbox::device_data() noexcept {
+  return thrust::raw_pointer_cast(centre_and_side_.data());
+}
+
+void Bbox::compute_box(const double *d_x, const double *d_y, const double *d_z,
+                       std::size_t count) {
+  if (count == 0) {
+    throw std::invalid_argument(
+        "Cannot compute a bounding box for an empty particle set.");
+  }
+
+  const auto first = thrust::make_counting_iterator<std::size_t>(0);
+  const auto last = first + count;
+  const double infinity = std::numeric_limits<double>::infinity();
+
+  // These extrema form the identity value for the component-wise reduction:
+  // the first particle replaces all six infinities.
+  const Bounds initial{infinity, -infinity, infinity, -infinity,
+                       infinity, -infinity, false};
+
+  // Convert each particle index to a degenerate box, then merge all boxes in
+  // one device-side reduction.  Counting iterators avoid allocating an index
+  // array solely to traverse the coordinate arrays.
+  const Bounds result = thrust::transform_reduce(
+      thrust::device, first, last, ParticleToBounds{d_x, d_y, d_z}, initial,
+      CombineBounds{});
+
+  if (result.contains_non_finite) {
+    throw std::domain_error(
+        "Particle positions must be finite to compute a bounding box.");
+  }
+
+  const double center_x = (result.xmin + result.xmax) * 0.5;
+  const double center_y = (result.ymin + result.ymax) * 0.5;
+  const double center_z = (result.zmin + result.zmax) * 0.5;
+
+  // Use the longest axis so the resulting cube encloses all three axis-aligned
+  // ranges while remaining centered on the original bounding box.
+  double side = std::max({result.xmax - result.xmin, result.ymax - result.ymin,
+                          result.zmax - result.zmin});
+
+  // A positive side keeps later Morton normalization well-defined when every
+  // particle occupies the same point.
+  if (side == 0.0) {
+    side = 1.0;
+  }
+
+  const std::array<double, value_count> host_values{center_x, center_y,
+                                                    center_z, side};
+  // Keep the compact [center_x, center_y, center_z, side] representation on the
+  // device for kernels that normalize positions against this box.
+  thrust::copy(host_values.begin(), host_values.end(),
+               centre_and_side_.begin());
 }
