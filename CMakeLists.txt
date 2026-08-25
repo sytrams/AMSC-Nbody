@@ -145,6 +145,7 @@ if(NBODY_ENABLE_CUDA)
         nbody_cuda
         STATIC
         gpu/cuda_kernels/globalbounding.cu
+        gpu/cuda_kernels/morton.cu
         gpu/cuda_kernels/morton_leaf_groups.cu
         gpu/cuda_kernels/octree_builder.cu
         gpu/cuda_kernels/octree_physics.cu

@@ -2,7 +2,6 @@
 #include <gtest/gtest.h>
 
 #include <cstdint>
-#include <iostream>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -26,38 +25,6 @@ namespace
         }
     }
 
-    void require(
-        bool condition,
-        const std::string& message)
-    {
-        if (!condition)
-            throw std::runtime_error(message);
-    }
-
-    template <typename T>
-    void requireVectorEqual(
-        const std::vector<T>& actual,
-        const std::vector<T>& expected,
-        const std::string& description)
-    {
-        if (actual.size() != expected.size())
-        {
-            throw std::runtime_error(
-                description + ": vector sizes differ");
-        }
-
-        for (std::size_t i = 0; i < actual.size(); ++i)
-        {
-            if (actual[i] != expected[i])
-            {
-                throw std::runtime_error(
-                    description +
-                    ": mismatch at index " +
-                    std::to_string(i));
-            }
-        }
-    }
-
     void validateInvariants(
         const std::vector<std::uint32_t>& sortedKeys,
         const std::vector<std::uint32_t>& uniqueKeys,
@@ -67,21 +34,17 @@ namespace
         const int nGroups =
             static_cast<int>(uniqueKeys.size());
 
-        require(
-            static_cast<int>(firstParticle.size()) == nGroups,
-            "firstParticle size does not match nGroups");
+        ASSERT_EQ(static_cast<int>(firstParticle.size()), nGroups)
+            << "firstParticle size does not match nGroups";
 
-        require(
-            static_cast<int>(particleCount.size()) == nGroups,
-            "particleCount size does not match nGroups");
+        ASSERT_EQ(static_cast<int>(particleCount.size()), nGroups)
+            << "particleCount size does not match nGroups";
 
-        require(
-            nGroups > 0,
-            "There must be at least one Morton group");
+        ASSERT_GT(nGroups, 0)
+            << "There must be at least one Morton group";
 
-        require(
-            firstParticle[0] == 0,
-            "The first Morton group must start at offset zero");
+        EXPECT_EQ(firstParticle[0], 0)
+            << "The first Morton group must start at offset zero";
 
         const int totalParticleCount =
             std::accumulate(
@@ -89,51 +52,43 @@ namespace
                 particleCount.end(),
                 0);
 
-        require(
-            totalParticleCount ==
-                static_cast<int>(sortedKeys.size()),
-            "The sum of group counts does not match particle count");
+        EXPECT_EQ(totalParticleCount, static_cast<int>(sortedKeys.size()))
+            << "The sum of group counts does not match particle count";
 
         for (int group = 0; group < nGroups; ++group)
         {
-            require(
-                particleCount[group] > 0,
-                "A Morton group has non-positive size");
+            ASSERT_GT(particleCount[group], 0)
+                << "A Morton group has non-positive size";
 
             if (group + 1 < nGroups)
             {
-                require(
-                    uniqueKeys[group] < uniqueKeys[group + 1],
-                    "Unique Morton keys are not strictly increasing");
+                EXPECT_LT(uniqueKeys[group], uniqueKeys[group + 1])
+                    << "Unique Morton keys are not strictly increasing";
 
-                require(
-                    firstParticle[group + 1] ==
-                        firstParticle[group] +
-                        particleCount[group],
-                    "Morton group offsets are not contiguous");
+                EXPECT_EQ(
+                    firstParticle[group + 1],
+                    firstParticle[group] + particleCount[group])
+                    << "Morton group offsets are not contiguous";
             }
 
             const int first = firstParticle[group];
             const int count = particleCount[group];
 
-            require(
-                first >= 0,
-                "A Morton group has a negative starting offset");
+            ASSERT_GE(first, 0)
+                << "A Morton group has a negative starting offset";
 
-            require(
-                first + count <=
-                    static_cast<int>(sortedKeys.size()),
-                "A Morton group exceeds the input range");
+            ASSERT_LE(first + count, static_cast<int>(sortedKeys.size()))
+                << "A Morton group exceeds the input range";
 
             for (int localParticle = 0;
                 localParticle < count;
                 ++localParticle)
             {
-                require(
-                    sortedKeys[first + localParticle] ==
-                        uniqueKeys[group],
-                    "A group contains a key different "
-                    "from its unique Morton key");
+                EXPECT_EQ(
+                    sortedKeys[first + localParticle],
+                    uniqueKeys[group])
+                    << "A group contains a key different "
+                       "from its unique Morton key";
             }
         }
     }
@@ -176,20 +131,14 @@ namespace
                 d_sortedKeys,
                 static_cast<int>(sortedKeys.size()));
 
-            require(
-                groups.nParticles ==
-                    static_cast<int>(sortedKeys.size()),
-                "groups.nParticles is incorrect");
+            EXPECT_EQ(groups.nParticles, static_cast<int>(sortedKeys.size()))
+                << "groups.nParticles is incorrect";
 
-            require(
-                groups.nGroups ==
-                    static_cast<int>(expectedUniqueKeys.size()),
-                "groups.nGroups is incorrect");
+            EXPECT_EQ(groups.nGroups, static_cast<int>(expectedUniqueKeys.size()))
+                << "groups.nGroups is incorrect";
 
-            require(
-                groups.capacity ==
-                    static_cast<int>(sortedKeys.size()),
-                "groups.capacity is incorrect");
+            EXPECT_EQ(groups.capacity, static_cast<int>(sortedKeys.size()))
+                << "groups.capacity is incorrect";
 
             std::vector<std::uint32_t> actualUniqueKeys(
                 static_cast<std::size_t>(groups.nGroups));
@@ -232,20 +181,11 @@ namespace
                     cudaMemcpyDeviceToHost),
                 "copy group counts to host");
 
-            requireVectorEqual(
-                actualUniqueKeys,
-                expectedUniqueKeys,
-                name + " uniqueKeys");
+            EXPECT_EQ(actualUniqueKeys, expectedUniqueKeys) << name + " uniqueKeys";
 
-            requireVectorEqual(
-                actualFirstParticle,
-                expectedFirstParticle,
-                name + " firstParticle");
+            EXPECT_EQ(actualFirstParticle, expectedFirstParticle) << name + " firstParticle";
 
-            requireVectorEqual(
-                actualParticleCount,
-                expectedParticleCount,
-                name + " particleCount");
+            EXPECT_EQ(actualParticleCount, expectedParticleCount) << name + " particleCount";
 
             validateInvariants(
                 sortedKeys,
@@ -262,11 +202,6 @@ namespace
 
         freeMortonLeafGroups(groups);
         cudaFree(d_sortedKeys);
-
-        std::cout
-            << "[PASS] "
-            << name
-            << '\n';
     }
 
     void testCapacityValidation()
@@ -299,25 +234,12 @@ namespace
             // Gli array possono contenere soltanto due elementi.
             allocateMortonLeafGroups(groups, 2);
 
-            bool exceptionThrown = false;
-
-            try
-            {
-                // Tentativo di elaborare tre particelle.
+            EXPECT_THROW(
                 buildMortonLeafGroups(
                     groups,
                     d_sortedKeys,
-                    3);
-            }
-            catch (const std::invalid_argument&)
-            {
-                exceptionThrown = true;
-            }
-
-            require(
-                exceptionThrown,
-                "buildMortonLeafGroups accepted an input "
-                "larger than its allocated capacity");
+                    3),
+                std::invalid_argument);
         }
         catch (...)
         {
@@ -328,9 +250,6 @@ namespace
 
         freeMortonLeafGroups(groups);
         cudaFree(d_sortedKeys);
-
-        std::cout
-            << "[PASS] capacity validation\n";
     }
 } // namespace
 

@@ -1,20 +1,19 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-script_directory="$(
-    cd "$(dirname "${BASH_SOURCE[0]}")"
-    pwd
-)"
-project_root="$(
-    cd "$script_directory/../.."
-    pwd
-)"
+script_directory="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+project_root="$(cd "$script_directory/../.." && pwd)"
 build_directory="${1:-$project_root/build/cuda-tests}"
+
+# WSL exposes the Windows NVIDIA driver libraries here. Prefer them when the
+# directory exists so Compute Sanitizer uses the same driver bridge as CUDA.
+if [[ -d /usr/lib/wsl/lib ]]; then
+    export LD_LIBRARY_PATH="/usr/lib/wsl/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+fi
 
 cmake_arguments=(
     -S "$project_root"
     -B "$build_directory"
-    -G Ninja
     -DBUILD_TESTING=ON
     -DNBODY_ENABLE_CUDA=ON
     -DNBODY_BUILD_VIEWER=OFF
@@ -27,14 +26,30 @@ if [[ -n "${CMAKE_CUDA_ARCHITECTURES:-}" ]]; then
 fi
 
 cmake "${cmake_arguments[@]}"
-cmake --build "$build_directory" --parallel --target nbody_cuda_unit_tests nbody_cuda_integration_tests
+cmake --build "$build_directory" --parallel
 
-compute-sanitizer --tool memcheck --leak-check full "$build_directory/tests/nbody_cuda_unit_tests"
+cuda_test_targets=(
+    nbody_cuda_unit_tests
+    nbody_cuda_integration_tests
+)
 
-compute-sanitizer --tool memcheck --leak-check full "$build_directory/tests/nbody_cuda_integration_tests"
+for target in "${cuda_test_targets[@]}"; do
+    executable="$build_directory/tests/$target"
+    if [[ ! -x "$executable" ]]; then
+        echo "CUDA test executable not found: $executable" >&2
+        exit 1
+    fi
 
-if [[ "${RUN_RACECHECK:-0}" == "1" ]]; then
-    compute-sanitizer --tool racecheck "$build_directory/tests/nbody_cuda_unit_tests"
+    compute-sanitizer \
+        --error-exitcode 1 \
+        --tool memcheck \
+        --leak-check full \
+        "$executable"
 
-    compute-sanitizer --tool racecheck "$build_directory/tests/nbody_cuda_integration_tests"
-fi
+    if [[ "${RUN_RACECHECK:-0}" == "1" ]]; then
+        compute-sanitizer \
+            --error-exitcode 1 \
+            --tool racecheck \
+            "$executable"
+    fi
+done

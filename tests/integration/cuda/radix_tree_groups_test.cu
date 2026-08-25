@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
-#include <iostream>
 #include <numeric>
 #include <stdexcept>
 #include <string>
@@ -29,43 +28,16 @@ void checkCuda(
     }
 }
 
-void require(
-    bool condition,
-    const std::string& message)
-{
-    if (!condition)
-        throw std::runtime_error(message);
-}
-
-bool almostEqual(
-    float actual,
-    float expected)
-{
-    const float scale =
-        std::max({
-            1.0f,
-            std::fabs(actual),
-            std::fabs(expected)
-        });
-
-    return std::fabs(actual - expected) <=
-           2.0e-5f * scale;
-}
-
-void requireAlmostEqual(
-    float actual,
-    float expected,
+void expectRelativeNear(
+    double actual,
+    double expected,
     const std::string& label)
 {
-    if (!almostEqual(actual, expected))
-    {
-        throw std::runtime_error(
-            label +
-            ": expected " +
-            std::to_string(expected) +
-            ", got " +
-            std::to_string(actual));
-    }
+    const double scale =
+        std::max({1.0, std::fabs(actual), std::fabs(expected)});
+
+    EXPECT_NEAR(actual, expected, 2.0e-5 * scale)
+        << label;
 }
 
 template <typename T>
@@ -124,20 +96,20 @@ private:
 
 struct Aggregate
 {
-    float mass = 0.0f;
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
+    double mass = 0.0f;
+    double x = 0.0f;
+    double y = 0.0f;
+    double z = 0.0f;
 };
 
 Aggregate aggregateRange(
     int first,
     int count,
     const std::vector<std::uint32_t>& sortedIndices,
-    const std::vector<float>& mass,
-    const std::vector<float>& x,
-    const std::vector<float>& y,
-    const std::vector<float>& z)
+    const std::vector<double>& mass,
+    const std::vector<double>& x,
+    const std::vector<double>& y,
+    const std::vector<double>& z)
 {
     Aggregate result;
 
@@ -149,7 +121,7 @@ Aggregate aggregateRange(
         const std::uint32_t particle =
             sortedIndices[sortedPosition];
 
-        const float particleMass =
+        const double particleMass =
             mass[particle];
 
         result.mass += particleMass;
@@ -160,7 +132,7 @@ Aggregate aggregateRange(
 
     if (result.mass > 0.0f)
     {
-        const float inverseMass =
+        const double inverseMass =
             1.0f / result.mass;
 
         result.x *= inverseMass;
@@ -205,35 +177,32 @@ void runCase(
     const std::string& name,
     const std::vector<std::uint32_t>& sortedKeys,
     const std::vector<std::uint32_t>& sortedIndices,
-    const std::vector<float>& mass,
-    const std::vector<float>& x,
-    const std::vector<float>& y,
-    const std::vector<float>& z)
+    const std::vector<double>& mass,
+    const std::vector<double>& x,
+    const std::vector<double>& y,
+    const std::vector<double>& z)
 {
-    require(
-        !sortedKeys.empty(),
-        name + ": empty Morton-key input");
+    ASSERT_FALSE(sortedKeys.empty()) << name + ": empty Morton-key input";
 
-    require(
-        std::is_sorted(
-            sortedKeys.begin(),
-            sortedKeys.end()),
-        name + ": Morton keys are not sorted");
+    ASSERT_TRUE(std::is_sorted(
+        sortedKeys.begin(),
+        sortedKeys.end()))
+        << name + ": Morton keys are not sorted";
 
     const int nParticles =
         static_cast<int>(sortedKeys.size());
 
-    require(
-        static_cast<int>(sortedIndices.size()) ==
-            nParticles,
-        name + ": wrong sortedIndices size");
+    ASSERT_EQ(static_cast<int>(sortedIndices.size()), nParticles)
+        << name + ": wrong sortedIndices size";
 
-    require(
-        static_cast<int>(mass.size()) == nParticles &&
-        static_cast<int>(x.size()) == nParticles &&
-        static_cast<int>(y.size()) == nParticles &&
-        static_cast<int>(z.size()) == nParticles,
-        name + ": wrong particle-array size");
+    ASSERT_EQ(static_cast<int>(mass.size()), nParticles)
+        << name + ": wrong mass size";
+    ASSERT_EQ(static_cast<int>(x.size()), nParticles)
+        << name + ": wrong X size";
+    ASSERT_EQ(static_cast<int>(y.size()), nParticles)
+        << name + ": wrong Y size";
+    ASSERT_EQ(static_cast<int>(z.size()), nParticles)
+        << name + ": wrong Z size";
 
     std::vector<std::uint32_t> permutation =
         sortedIndices;
@@ -244,11 +213,8 @@ void runCase(
 
     for (int i = 0; i < nParticles; ++i)
     {
-        require(
-            permutation[i] ==
-                static_cast<std::uint32_t>(i),
-            name +
-            ": sortedIndices is not a permutation");
+        ASSERT_EQ(permutation[i], static_cast<std::uint32_t>(i))
+            << name + ": sortedIndices is not a permutation";
     }
 
     std::vector<std::uint32_t> expectedUniqueKeys;
@@ -263,10 +229,10 @@ void runCase(
 
     DeviceArray<std::uint32_t> d_keys(sortedKeys);
     DeviceArray<std::uint32_t> d_indices(sortedIndices);
-    DeviceArray<float> d_mass(mass);
-    DeviceArray<float> d_x(x);
-    DeviceArray<float> d_y(y);
-    DeviceArray<float> d_z(z);
+    DeviceArray<double> d_mass(mass);
+    DeviceArray<double> d_x(x);
+    DeviceArray<double> d_y(y);
+    DeviceArray<double> d_z(z);
 
     MortonLeafGroups groups{};
     Tree tree{};
@@ -282,11 +248,10 @@ void runCase(
             d_keys.get(),
             nParticles);
 
-        require(
-            groups.nGroups ==
-                static_cast<int>(
-                    expectedUniqueKeys.size()),
-            name + ": wrong number of Morton groups");
+        EXPECT_EQ(
+            groups.nGroups,
+            static_cast<int>(expectedUniqueKeys.size()))
+            << name + ": wrong number of Morton groups";
 
         allocateTree(
             tree,
@@ -305,10 +270,8 @@ void runCase(
             d_y.get(),
             d_z.get());
 
-        require(
-            tree.nLeaves == groups.nGroups,
-            name +
-            ": tree leaf count differs from group count");
+        EXPECT_EQ(tree.nLeaves, groups.nGroups)
+            << name + ": tree leaf count differs from group count";
 
         const int nLeaves = tree.nLeaves;
         const int totalNodes =
@@ -350,30 +313,25 @@ void runCase(
                 cudaMemcpyDeviceToHost),
             "copy particleCount");
 
-        require(
-            actualUniqueKeys == expectedUniqueKeys,
-            name + ": unique Morton keys differ");
+        EXPECT_EQ(actualUniqueKeys, expectedUniqueKeys)
+            << name + ": unique Morton keys differ";
 
-        require(
-            actualFirstParticle ==
-                expectedFirstParticle,
-            name + ": group offsets differ");
+        EXPECT_EQ(actualFirstParticle, expectedFirstParticle)
+            << name + ": group offsets differ";
 
-        require(
-            actualParticleCount ==
-                expectedParticleCount,
-            name + ": group counts differ");
+        EXPECT_EQ(actualParticleCount, expectedParticleCount)
+            << name + ": group counts differ";
 
-        std::vector<float> treeMass(
+        std::vector<double> treeMass(
             static_cast<std::size_t>(totalNodes));
 
-        std::vector<float> treeComX(
+        std::vector<double> treeComX(
             static_cast<std::size_t>(totalNodes));
 
-        std::vector<float> treeComY(
+        std::vector<double> treeComY(
             static_cast<std::size_t>(totalNodes));
 
-        std::vector<float> treeComZ(
+        std::vector<double> treeComZ(
             static_cast<std::size_t>(totalNodes));
 
         checkCuda(
@@ -381,7 +339,7 @@ void runCase(
                 treeMass.data(),
                 tree.mass,
                 static_cast<std::size_t>(totalNodes) *
-                    sizeof(float),
+                    sizeof(double),
                 cudaMemcpyDeviceToHost),
             "copy tree mass");
 
@@ -390,7 +348,7 @@ void runCase(
                 treeComX.data(),
                 tree.comX,
                 static_cast<std::size_t>(totalNodes) *
-                    sizeof(float),
+                    sizeof(double),
                 cudaMemcpyDeviceToHost),
             "copy tree comX");
 
@@ -399,7 +357,7 @@ void runCase(
                 treeComY.data(),
                 tree.comY,
                 static_cast<std::size_t>(totalNodes) *
-                    sizeof(float),
+                    sizeof(double),
                 cudaMemcpyDeviceToHost),
             "copy tree comY");
 
@@ -408,7 +366,7 @@ void runCase(
                 treeComZ.data(),
                 tree.comZ,
                 static_cast<std::size_t>(totalNodes) *
-                    sizeof(float),
+                    sizeof(double),
                 cudaMemcpyDeviceToHost),
             "copy tree comZ");
 
@@ -426,25 +384,13 @@ void runCase(
                     y,
                     z);
 
-            requireAlmostEqual(
-                treeMass[leaf],
-                expected.mass,
-                name + ": leaf mass");
+            expectRelativeNear(treeMass[leaf], expected.mass, name + ": leaf mass");
 
-            requireAlmostEqual(
-                treeComX[leaf],
-                expected.x,
-                name + ": leaf comX");
+            expectRelativeNear(treeComX[leaf], expected.x, name + ": leaf comX");
 
-            requireAlmostEqual(
-                treeComY[leaf],
-                expected.y,
-                name + ": leaf comY");
+            expectRelativeNear(treeComY[leaf], expected.y, name + ": leaf comY");
 
-            requireAlmostEqual(
-                treeComZ[leaf],
-                expected.z,
-                name + ": leaf comZ");
+            expectRelativeNear(treeComZ[leaf], expected.z, name + ": leaf comZ");
         }
 
         const Aggregate expectedRoot =
@@ -462,25 +408,13 @@ void runCase(
                 ? 0
                 : nLeaves;
 
-        requireAlmostEqual(
-            treeMass[root],
-            expectedRoot.mass,
-            name + ": root mass");
+        expectRelativeNear(treeMass[root], expectedRoot.mass, name + ": root mass");
 
-        requireAlmostEqual(
-            treeComX[root],
-            expectedRoot.x,
-            name + ": root comX");
+        expectRelativeNear(treeComX[root], expectedRoot.x, name + ": root comX");
 
-        requireAlmostEqual(
-            treeComY[root],
-            expectedRoot.y,
-            name + ": root comY");
+        expectRelativeNear(treeComY[root], expectedRoot.y, name + ": root comY");
 
-        requireAlmostEqual(
-            treeComZ[root],
-            expectedRoot.z,
-            name + ": root comZ");
+        expectRelativeNear(treeComZ[root], expectedRoot.z, name + ": root comZ");
 
         std::vector<int> parent(
             static_cast<std::size_t>(totalNodes));
@@ -494,9 +428,7 @@ void runCase(
                 cudaMemcpyDeviceToHost),
             "copy tree parent");
 
-        require(
-            parent[root] == -1,
-            name + ": root parent is not -1");
+        EXPECT_EQ(parent[root], -1) << name + ": root parent is not -1";
 
         if (nLeaves > 1)
         {
@@ -558,33 +490,25 @@ void runCase(
 
             // In the Karras indexing used by the current
             // implementation, internal local index 0 is root.
-            require(
-                rangeFirst[0] == 0,
-                name +
-                ": root range does not start at zero");
+            EXPECT_EQ(rangeFirst[0], 0)
+                << name + ": root range does not start at zero";
 
-            require(
-                rangeLast[0] == nLeaves - 1,
-                name +
-                ": root range does not cover all leaves");
+            EXPECT_EQ(rangeLast[0], nLeaves - 1)
+                << name + ": root range does not cover all leaves";
 
             for (int prefix : prefixLength)
             {
-                require(
-                    prefix >= 0 &&
-                    prefix <= 32,
-                    name +
+                EXPECT_TRUE(prefix >= 0 &&
+                    prefix <= 32) << name +
                     ": unique-key tree contains "
-                    "a virtual index suffix");
+                    "a virtual index suffix";
             }
 
             for (int count : visitCount)
             {
-                require(
-                    count == 2,
-                    name +
-                    ": an internal node was not "
-                    "completed by exactly two children");
+                EXPECT_EQ(count, 2)
+                    << name + ": an internal node was not "
+                       "completed by exactly two children";
             }
         }
     }
@@ -597,11 +521,6 @@ void runCase(
 
     freeTree(tree);
     freeMortonLeafGroups(groups);
-
-    std::cout
-        << "[PASS] "
-        << name
-        << '\n';
 }
 
 void testGeneratedCase()
@@ -614,16 +533,16 @@ void testGeneratedCase()
     std::vector<std::uint32_t> indices(
         static_cast<std::size_t>(n));
 
-    std::vector<float> mass(
+    std::vector<double> mass(
         static_cast<std::size_t>(n));
 
-    std::vector<float> x(
+    std::vector<double> x(
         static_cast<std::size_t>(n));
 
-    std::vector<float> y(
+    std::vector<double> y(
         static_cast<std::size_t>(n));
 
-    std::vector<float> z(
+    std::vector<double> z(
         static_cast<std::size_t>(n));
 
     for (int i = 0; i < n; ++i)
@@ -638,17 +557,17 @@ void testGeneratedCase()
 
         mass[i] =
             0.5f +
-            static_cast<float>(i % 11) *
+            static_cast<double>(i % 11) *
                 0.25f;
 
         x[i] =
-            static_cast<float>(i) * 0.1f;
+            static_cast<double>(i) * 0.1f;
 
         y[i] =
-            static_cast<float>((i * i) % 31);
+            static_cast<double>((i * i) % 31);
 
         z[i] =
-            -static_cast<float>(i) * 0.05f;
+            -static_cast<double>(i) * 0.05f;
     }
 
     runCase(

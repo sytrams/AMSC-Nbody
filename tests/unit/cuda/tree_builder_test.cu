@@ -6,7 +6,6 @@
 #include <cstdint>
 #include <functional>
 #include <iomanip>
-#include <iostream>
 #include <numeric>
 #include <random>
 #include <sstream>
@@ -31,12 +30,6 @@ void cudaCheck(cudaError_t error, const char* expression, const char* file, int 
 }
 
 #define CUDA_CHECK(expression) cudaCheck((expression), #expression, __FILE__, __LINE__)
-
-void require(bool condition, const std::string& message)
-{
-    if (!condition)
-        throw std::runtime_error(message);
-}
 
 template <typename T>
 class DeviceArray
@@ -106,10 +99,10 @@ struct HostTree
     std::vector<int> rangeLast;
     std::vector<int> prefixLength;
     std::vector<int> visitCount;
-    std::vector<float> mass;
-    std::vector<float> comX;
-    std::vector<float> comY;
-    std::vector<float> comZ;
+    std::vector<double> mass;
+    std::vector<double> comX;
+    std::vector<double> comY;
+    std::vector<double> comZ;
 };
 
 HostTree copyTreeToHost(const Tree& tree, int n, bool copyPhysicalData)
@@ -151,13 +144,13 @@ HostTree copyTreeToHost(const Tree& tree, int n, bool copyPhysicalData)
         host.comZ.resize(totalCount);
 
         CUDA_CHECK(cudaMemcpy(host.mass.data(), tree.mass,
-                              totalCount * sizeof(float), cudaMemcpyDeviceToHost));
+                              totalCount * sizeof(double), cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(host.comX.data(), tree.comX,
-                              totalCount * sizeof(float), cudaMemcpyDeviceToHost));
+                              totalCount * sizeof(double), cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(host.comY.data(), tree.comY,
-                              totalCount * sizeof(float), cudaMemcpyDeviceToHost));
+                              totalCount * sizeof(double), cudaMemcpyDeviceToHost));
         CUDA_CHECK(cudaMemcpy(host.comZ.data(), tree.comZ,
-                              totalCount * sizeof(float), cudaMemcpyDeviceToHost));
+                              totalCount * sizeof(double), cudaMemcpyDeviceToHost));
 
         if (n > 1)
         {
@@ -170,32 +163,32 @@ HostTree copyTreeToHost(const Tree& tree, int n, bool copyPhysicalData)
     return host;
 }
 
-void requireSorted(const std::vector<std::uint32_t>& keys)
+void assertPermutation(const std::vector<std::uint32_t>& indices, int n)
 {
-    require(std::is_sorted(keys.begin(), keys.end()),
-            "The test input Morton keys are not sorted");
-}
-
-void requirePermutation(const std::vector<std::uint32_t>& indices, int n)
-{
-    require(static_cast<int>(indices.size()) == n,
-            "sortedIndices has the wrong size");
+    ASSERT_EQ(static_cast<int>(indices.size()), n)
+        << "sortedIndices has the wrong size";
 
     std::vector<int> seen(static_cast<std::size_t>(n), 0);
     for (std::uint32_t index : indices)
     {
-        require(index < static_cast<std::uint32_t>(n),
-                "sortedIndices contains an out-of-range particle index");
+        ASSERT_LT(index, static_cast<std::uint32_t>(n))
+            << "sortedIndices contains an out-of-range particle index";
         ++seen[index];
     }
 
     for (int count : seen)
-        require(count == 1, "sortedIndices is not a permutation of [0, N)");
+        EXPECT_EQ(count, 1)
+            << "sortedIndices is not a permutation of [0, N)";
 }
 
 int countLeadingZeros32(std::uint32_t value)
 {
-    require(value != 0u, "countLeadingZeros32 requires a non-zero value");
+    if (value == 0u)
+    {
+        ADD_FAILURE()
+            << "countLeadingZeros32 requires a non-zero value";
+        return 32;
+    }
 
     int count = 0;
     while ((value & 0x80000000u) == 0u)
@@ -234,37 +227,36 @@ struct LeafRange
     int count = 0;
 };
 
-int validateTopology(const HostTree& tree,
+void validateTopology(const HostTree& tree,
                      const std::vector<std::uint32_t>& keys)
 {
     const int n = static_cast<int>(keys.size());
     const int totalNodes = 2 * n - 1;
 
-    require(static_cast<int>(tree.parent.size()) == totalNodes,
-            "parent has the wrong number of elements");
+    ASSERT_EQ(static_cast<int>(tree.parent.size()), totalNodes)
+        << "parent has the wrong number of elements";
 
     if (n == 1)
     {
-        require(tree.left.empty() && tree.right.empty(),
-                "A one-body tree must have no internal child arrays");
-        require(tree.rangeFirst.empty() && tree.rangeLast.empty() &&
-                    tree.prefixLength.empty(),
-                "A one-body tree must have no internal metadata arrays");
-        require(tree.parent[0] == -1,
-                "The single leaf must also be the root");
-        return 0;
+        EXPECT_TRUE(tree.left.empty() && tree.right.empty())
+            << "A one-body tree must have no internal child arrays";
+        EXPECT_TRUE(tree.rangeFirst.empty() && tree.rangeLast.empty() &&
+                    tree.prefixLength.empty()) << "A one-body tree must have no internal metadata arrays";
+        EXPECT_EQ(tree.parent[0], -1)
+            << "The single leaf must also be the root";
+        return;
     }
 
-    require(static_cast<int>(tree.left.size()) == n - 1,
-            "left has the wrong number of elements");
-    require(static_cast<int>(tree.right.size()) == n - 1,
-            "right has the wrong number of elements");
-    require(static_cast<int>(tree.rangeFirst.size()) == n - 1,
-            "rangeFirst has the wrong number of elements");
-    require(static_cast<int>(tree.rangeLast.size()) == n - 1,
-            "rangeLast has the wrong number of elements");
-    require(static_cast<int>(tree.prefixLength.size()) == n - 1,
-            "prefixLength has the wrong number of elements");
+    ASSERT_EQ(static_cast<int>(tree.left.size()), n - 1)
+        << "left has the wrong number of elements";
+    ASSERT_EQ(static_cast<int>(tree.right.size()), n - 1)
+        << "right has the wrong number of elements";
+    ASSERT_EQ(static_cast<int>(tree.rangeFirst.size()), n - 1)
+        << "rangeFirst has the wrong number of elements";
+    ASSERT_EQ(static_cast<int>(tree.rangeLast.size()), n - 1)
+        << "rangeLast has the wrong number of elements";
+    ASSERT_EQ(static_cast<int>(tree.prefixLength.size()), n - 1)
+        << "prefixLength has the wrong number of elements";
 
     std::vector<int> incoming(static_cast<std::size_t>(totalNodes), 0);
 
@@ -274,16 +266,18 @@ int validateTopology(const HostTree& tree,
         const int leftChild = tree.left[internalIndex];
         const int rightChild = tree.right[internalIndex];
 
-        require(leftChild >= 0 && leftChild < totalNodes,
-                "left child is outside [0, 2N-1)");
-        require(rightChild >= 0 && rightChild < totalNodes,
-                "right child is outside [0, 2N-1)");
-        require(leftChild != rightChild,
-                "An internal node has the same left and right child");
-        require(tree.parent[leftChild] == node,
-                "parent[leftChild] does not point back to its owner");
-        require(tree.parent[rightChild] == node,
-                "parent[rightChild] does not point back to its owner");
+        ASSERT_GE(leftChild, 0) << "left child is negative";
+        ASSERT_LT(leftChild, totalNodes)
+            << "left child is outside [0, 2N-1)";
+        ASSERT_GE(rightChild, 0) << "right child is negative";
+        ASSERT_LT(rightChild, totalNodes)
+            << "right child is outside [0, 2N-1)";
+        EXPECT_NE(leftChild, rightChild)
+            << "An internal node has the same left and right child";
+        EXPECT_EQ(tree.parent[leftChild], node)
+            << "parent[leftChild] does not point back to its owner";
+        EXPECT_EQ(tree.parent[rightChild], node)
+            << "parent[rightChild] does not point back to its owner";
 
         ++incoming[leftChild];
         ++incoming[rightChild];
@@ -296,23 +290,22 @@ int validateTopology(const HostTree& tree,
             roots.push_back(node);
     }
 
-    require(roots.size() == 1,
-            "There must be exactly one internal node with parent == -1");
+    ASSERT_EQ(roots.size(), 1u)
+        << "There must be exactly one internal node with parent == -1";
 
     const int root = roots.front();
-    require(root == n,
-            "Karras indexing should place the root at global node N");
+    EXPECT_EQ(root, n)
+        << "Karras indexing should place the root at global node N";
 
     for (int node = 0; node < totalNodes; ++node)
     {
         const int expectedIncoming = (node == root) ? 0 : 1;
-        require(incoming[node] == expectedIncoming,
-                "A node has an invalid number of incoming child references");
+        EXPECT_EQ(incoming[node], expectedIncoming)
+            << "A node has an invalid number of incoming child references";
 
         if (node != root)
         {
-            require(tree.parent[node] >= n && tree.parent[node] < totalNodes,
-                    "A non-root node has an invalid parent ID");
+            EXPECT_TRUE(tree.parent[node] >= n && tree.parent[node] < totalNodes) << "A non-root node has an invalid parent ID";
         }
     }
 
@@ -320,10 +313,18 @@ int validateTopology(const HostTree& tree,
     int visitedNodes = 0;
 
     std::function<LeafRange(int)> visit = [&](int node) -> LeafRange {
-        require(node >= 0 && node < totalNodes,
-                "Traversal reached an invalid node ID");
-        require(state[node] == 0,
-                "The topology contains a cycle or a node reachable twice");
+        if (node < 0 || node >= totalNodes)
+        {
+            ADD_FAILURE() << "Traversal reached an invalid node ID";
+            return {};
+        }
+
+        if (state[node] != 0)
+        {
+            ADD_FAILURE()
+                << "The topology contains a cycle or a node reachable twice";
+            return {};
+        }
 
         state[node] = 1;
         ++visitedNodes;
@@ -338,8 +339,8 @@ int validateTopology(const HostTree& tree,
         const LeafRange leftRange = visit(tree.left[internalIndex]);
         const LeafRange rightRange = visit(tree.right[internalIndex]);
 
-        require(leftRange.last + 1 == rightRange.first,
-                "Left and right subtrees are not adjacent Morton-order ranges");
+        EXPECT_EQ(leftRange.last + 1, rightRange.first)
+            << "Left and right subtrees are not adjacent Morton-order ranges";
 
         const LeafRange result{
             leftRange.first,
@@ -347,72 +348,55 @@ int validateTopology(const HostTree& tree,
             leftRange.count + rightRange.count
         };
 
-        require(result.count == result.last - result.first + 1,
-                "An internal node does not cover a contiguous leaf range");
+        EXPECT_EQ(result.count, result.last - result.first + 1)
+            << "An internal node does not cover a contiguous leaf range";
 
-        require(tree.rangeFirst[internalIndex] == result.first,
-                "rangeFirst does not match the subtree topology");
-        require(tree.rangeLast[internalIndex] == result.last,
-                "rangeLast does not match the subtree topology");
+        EXPECT_EQ(tree.rangeFirst[internalIndex], result.first)
+            << "rangeFirst does not match the subtree topology";
+        EXPECT_EQ(tree.rangeLast[internalIndex], result.last)
+            << "rangeLast does not match the subtree topology";
 
         const int expectedPrefix =
             hostLongestCommonPrefix(keys, result.first, result.last);
-        require(tree.prefixLength[internalIndex] == expectedPrefix,
-                "prefixLength does not match the node Morton-key range");
+        EXPECT_EQ(tree.prefixLength[internalIndex], expectedPrefix)
+            << "prefixLength does not match the node Morton-key range";
 
         state[node] = 2;
         return result;
     };
 
     const LeafRange rootRange = visit(root);
-    require(rootRange.first == 0 && rootRange.last == n - 1 && rootRange.count == n,
-            "The root does not cover all Morton-order leaves");
-    require(visitedNodes == totalNodes,
-            "Some nodes are disconnected from the root");
+    EXPECT_TRUE(rootRange.first == 0 && rootRange.last == n - 1 && rootRange.count == n) << "The root does not cover all Morton-order leaves";
+    EXPECT_EQ(visitedNodes, totalNodes)
+        << "Some nodes are disconnected from the root";
 
-    return root;
 }
 
-bool almostEqual(float actual, float expected)
+void expectRelativeNear(
+    double actual,
+    double expected,
+    const std::string& label)
 {
-    const float scale = std::max({1.0f, std::fabs(actual), std::fabs(expected)});
-    return std::fabs(actual - expected) <= 2.0e-5f * scale;
-}
+    const double scale =
+        std::max({1.0, std::fabs(actual), std::fabs(expected)});
 
-void requireAlmostEqual(float actual, float expected, const std::string& label)
-{
-    if (almostEqual(actual, expected))
-        return;
-
-    std::ostringstream message;
-    message << std::setprecision(9) << label << ": expected " << expected
-            << ", got " << actual;
-    throw std::runtime_error(message.str());
-}
-
-template <typename T>
-void requireVectorEqual(const std::vector<T>& actual,
-                        const std::vector<T>& expected,
-                        const std::string& label)
-{
-    require(actual.size() == expected.size(), label + " has the wrong size");
-
-    for (std::size_t i = 0; i < actual.size(); ++i)
-    {
-        if (actual[i] == expected[i])
-            continue;
-
-        std::ostringstream message;
-        message << label << '[' << i << "]: expected " << expected[i]
-                << ", got " << actual[i];
-        throw std::runtime_error(message.str());
-    }
+    EXPECT_NEAR(actual, expected, 2.0e-5 * scale)
+        << label;
 }
 
 HostTree buildAndCopyTopology(const std::vector<std::uint32_t>& keys)
 {
-    require(!keys.empty(), "At least one Morton key is required");
-    requireSorted(keys);
+    if (keys.empty())
+    {
+        ADD_FAILURE() << "At least one Morton key is required";
+        return {};
+    }
+
+    if (!std::is_sorted(keys.begin(), keys.end()))
+    {
+        ADD_FAILURE() << "The test input Morton keys are not sorted";
+        return {};
+    }
 
     const int n = static_cast<int>(keys.size());
     DeviceArray<std::uint32_t> deviceKeys(keys);
@@ -426,35 +410,31 @@ HostTree buildAndCopyTopology(const std::vector<std::uint32_t>& keys)
 
 struct Aggregate
 {
-    float mass = 0.0f;
-    float x = 0.0f;
-    float y = 0.0f;
-    float z = 0.0f;
+    double mass = 0.0f;
+    double x = 0.0f;
+    double y = 0.0f;
+    double z = 0.0f;
 };
 
 void verifyCenterOfMass(const HostTree& tree,
                         int n,
                         const std::vector<std::uint32_t>& sortedIndices,
-                        const std::vector<float>& particleMass,
-                        const std::vector<float>& positionX,
-                        const std::vector<float>& positionY,
-                        const std::vector<float>& positionZ)
+                        const std::vector<double>& particleMass,
+                        const std::vector<double>& positionX,
+                        const std::vector<double>& positionY,
+                        const std::vector<double>& positionZ)
 {
     const int totalNodes = 2 * n - 1;
-    require(static_cast<int>(tree.mass.size()) == totalNodes,
-            "Physical arrays were not copied");
+    ASSERT_EQ(static_cast<int>(tree.mass.size()), totalNodes)
+        << "Physical arrays were not copied";
 
     for (int leaf = 0; leaf < n; ++leaf)
     {
         const std::uint32_t particle = sortedIndices[leaf];
-        requireAlmostEqual(tree.mass[leaf], particleMass[particle],
-                           "leaf mass");
-        requireAlmostEqual(tree.comX[leaf], positionX[particle],
-                           "leaf comX");
-        requireAlmostEqual(tree.comY[leaf], positionY[particle],
-                           "leaf comY");
-        requireAlmostEqual(tree.comZ[leaf], positionZ[particle],
-                           "leaf comZ");
+        expectRelativeNear(tree.mass[leaf], particleMass[particle], "leaf mass");
+        expectRelativeNear(tree.comX[leaf], positionX[particle], "leaf comX");
+        expectRelativeNear(tree.comY[leaf], positionY[particle], "leaf comY");
+        expectRelativeNear(tree.comZ[leaf], positionZ[particle], "leaf comZ");
     }
 
     std::function<Aggregate(int)> expectedForNode = [&](int node) -> Aggregate {
@@ -472,7 +452,7 @@ void verifyCenterOfMass(const HostTree& tree,
         const int internalIndex = node - n;
         const Aggregate left = expectedForNode(tree.left[internalIndex]);
         const Aggregate right = expectedForNode(tree.right[internalIndex]);
-        const float totalMass = left.mass + right.mass;
+        const double totalMass = left.mass + right.mass;
 
         Aggregate result;
         result.mass = totalMass;
@@ -488,49 +468,47 @@ void verifyCenterOfMass(const HostTree& tree,
     for (int node = n; node < totalNodes; ++node)
     {
         const Aggregate expected = expectedForNode(node);
-        requireAlmostEqual(tree.mass[node], expected.mass,
-                           "internal mass at node " + std::to_string(node));
-        requireAlmostEqual(tree.comX[node], expected.x,
-                           "internal comX at node " + std::to_string(node));
-        requireAlmostEqual(tree.comY[node], expected.y,
-                           "internal comY at node " + std::to_string(node));
-        requireAlmostEqual(tree.comZ[node], expected.z,
-                           "internal comZ at node " + std::to_string(node));
+        expectRelativeNear(tree.mass[node], expected.mass, "internal mass at node " + std::to_string(node));
+        expectRelativeNear(tree.comX[node], expected.x, "internal comX at node " + std::to_string(node));
+        expectRelativeNear(tree.comY[node], expected.y, "internal comY at node " + std::to_string(node));
+        expectRelativeNear(tree.comZ[node], expected.z, "internal comZ at node " + std::to_string(node));
     }
 
     if (n > 1)
     {
-        require(static_cast<int>(tree.visitCount.size()) == n - 1,
-                "visitCount has the wrong size");
+        ASSERT_EQ(static_cast<int>(tree.visitCount.size()), n - 1)
+            << "visitCount has the wrong size";
         for (int count : tree.visitCount)
-            require(count == 2, "Every internal node must be visited by exactly two children");
+            EXPECT_EQ(count, 2)
+                << "Every internal node must be visited by exactly two children";
     }
 }
 
 void runEndToEndCase(const std::string& name,
                      const std::vector<std::uint32_t>& keys,
                      const std::vector<std::uint32_t>& sortedIndices,
-                     const std::vector<float>& particleMass,
-                     const std::vector<float>& positionX,
-                     const std::vector<float>& positionY,
-                     const std::vector<float>& positionZ)
+                     const std::vector<double>& particleMass,
+                     const std::vector<double>& positionX,
+                     const std::vector<double>& positionY,
+                     const std::vector<double>& positionZ)
 {
-    require(!keys.empty(), name + ": empty Morton-key vector");
-    requireSorted(keys);
+    ASSERT_FALSE(keys.empty()) << name + ": empty Morton-key vector";
+    ASSERT_TRUE(std::is_sorted(keys.begin(), keys.end()))
+        << name + ": Morton keys are not sorted";
 
     const int n = static_cast<int>(keys.size());
-    requirePermutation(sortedIndices, n);
-    require(static_cast<int>(particleMass.size()) == n, name + ": wrong mass size");
-    require(static_cast<int>(positionX.size()) == n, name + ": wrong X size");
-    require(static_cast<int>(positionY.size()) == n, name + ": wrong Y size");
-    require(static_cast<int>(positionZ.size()) == n, name + ": wrong Z size");
+    ASSERT_NO_FATAL_FAILURE(assertPermutation(sortedIndices, n));
+    ASSERT_EQ(static_cast<int>(particleMass.size()), n) << name + ": wrong mass size";
+    ASSERT_EQ(static_cast<int>(positionX.size()), n) << name + ": wrong X size";
+    ASSERT_EQ(static_cast<int>(positionY.size()), n) << name + ": wrong Y size";
+    ASSERT_EQ(static_cast<int>(positionZ.size()), n) << name + ": wrong Z size";
 
     DeviceArray<std::uint32_t> deviceKeys(keys);
     DeviceArray<std::uint32_t> deviceIndices(sortedIndices);
-    DeviceArray<float> deviceMass(particleMass);
-    DeviceArray<float> deviceX(positionX);
-    DeviceArray<float> deviceY(positionY);
-    DeviceArray<float> deviceZ(positionZ);
+    DeviceArray<double> deviceMass(particleMass);
+    DeviceArray<double> deviceX(positionX);
+    DeviceArray<double> deviceY(positionY);
+    DeviceArray<double> deviceZ(positionZ);
     TreeOwner treeOwner(n);
 
     buildTree(treeOwner.get(), deviceKeys.get(), n);
@@ -538,11 +516,10 @@ void runEndToEndCase(const std::string& name,
                         deviceX.get(), deviceY.get(), deviceZ.get(), n);
 
     HostTree hostTree = copyTreeToHost(treeOwner.get(), n, true);
-    validateTopology(hostTree, keys);
-    verifyCenterOfMass(hostTree, n, sortedIndices, particleMass,
-                       positionX, positionY, positionZ);
-
-    std::cout << "[PASS] " << name << '\n';
+    ASSERT_NO_FATAL_FAILURE(validateTopology(hostTree, keys));
+    ASSERT_NO_FATAL_FAILURE(verifyCenterOfMass(
+        hostTree, n, sortedIndices, particleMass,
+        positionX, positionY, positionZ));
 }
 
 void testSingleLeaf()
@@ -560,13 +537,12 @@ void testSingleLeaf()
 void testTwoLeavesExactTopology()
 {
     const HostTree tree = buildAndCopyTopology({0x00000000u, 0x80000000u});
-    requireVectorEqual(tree.left, {0}, "two-leaf left");
-    requireVectorEqual(tree.right, {1}, "two-leaf right");
-    requireVectorEqual(tree.parent, {2, 2, -1}, "two-leaf parent");
-    requireVectorEqual(tree.rangeFirst, {0}, "two-leaf rangeFirst");
-    requireVectorEqual(tree.rangeLast, {1}, "two-leaf rangeLast");
-    requireVectorEqual(tree.prefixLength, {0}, "two-leaf prefixLength");
-    std::cout << "[PASS] exact topology: two leaves\n";
+    EXPECT_EQ(tree.left, (std::vector<int>{0})) << "two-leaf left";
+    EXPECT_EQ(tree.right, (std::vector<int>{1})) << "two-leaf right";
+    EXPECT_EQ(tree.parent, (std::vector<int>{2, 2, -1})) << "two-leaf parent";
+    EXPECT_EQ(tree.rangeFirst, (std::vector<int>{0})) << "two-leaf rangeFirst";
+    EXPECT_EQ(tree.rangeLast, (std::vector<int>{1})) << "two-leaf rangeLast";
+    EXPECT_EQ(tree.prefixLength, (std::vector<int>{0})) << "two-leaf prefixLength";
 }
 
 void testBalancedFourExactTopology()
@@ -578,17 +554,12 @@ void testBalancedFourExactTopology()
         0xC0000000u
     });
 
-    requireVectorEqual(tree.left, {5, 0, 2}, "balanced-four left");
-    requireVectorEqual(tree.right, {6, 1, 3}, "balanced-four right");
-    requireVectorEqual(tree.parent, {5, 5, 6, 6, -1, 4, 4},
-                       "balanced-four parent");
-    requireVectorEqual(tree.rangeFirst, {0, 0, 2},
-                       "balanced-four rangeFirst");
-    requireVectorEqual(tree.rangeLast, {3, 1, 3},
-                       "balanced-four rangeLast");
-    requireVectorEqual(tree.prefixLength, {0, 1, 1},
-                       "balanced-four prefixLength");
-    std::cout << "[PASS] exact topology: balanced four leaves\n";
+    EXPECT_EQ(tree.left, (std::vector<int>{5, 0, 2})) << "balanced-four left";
+    EXPECT_EQ(tree.right, (std::vector<int>{6, 1, 3})) << "balanced-four right";
+    EXPECT_EQ(tree.parent, (std::vector<int>{5, 5, 6, 6, -1, 4, 4})) << "balanced-four parent";
+    EXPECT_EQ(tree.rangeFirst, (std::vector<int>{0, 0, 2})) << "balanced-four rangeFirst";
+    EXPECT_EQ(tree.rangeLast, (std::vector<int>{3, 1, 3})) << "balanced-four rangeLast";
+    EXPECT_EQ(tree.prefixLength, (std::vector<int>{0, 1, 1})) << "balanced-four prefixLength";
 }
 
 void testPermutationAndCenterOfMass()
@@ -639,17 +610,17 @@ void testRandomCases()
         std::iota(indices.begin(), indices.end(), 0u);
         std::shuffle(indices.begin(), indices.end(), generator);
 
-        std::vector<float> mass(static_cast<std::size_t>(n));
-        std::vector<float> x(static_cast<std::size_t>(n));
-        std::vector<float> y(static_cast<std::size_t>(n));
-        std::vector<float> z(static_cast<std::size_t>(n));
+        std::vector<double> mass(static_cast<std::size_t>(n));
+        std::vector<double> x(static_cast<std::size_t>(n));
+        std::vector<double> y(static_cast<std::size_t>(n));
+        std::vector<double> z(static_cast<std::size_t>(n));
 
         for (int i = 0; i < n; ++i)
         {
-            mass[i] = 0.5f + static_cast<float>((i % 13) + 1) * 0.25f;
-            x[i] = static_cast<float>(i) * 0.75f - 10.0f;
-            y[i] = static_cast<float>((i * i) % 29) - 14.0f;
-            z[i] = static_cast<float>((i * 7) % 31) * 0.5f;
+            mass[i] = 0.5f + static_cast<double>((i % 13) + 1) * 0.25f;
+            x[i] = static_cast<double>(i) * 0.75f - 10.0f;
+            y[i] = static_cast<double>((i * i) % 29) - 14.0f;
+            z[i] = static_cast<double>((i * 7) % 31) * 0.5f;
         }
 
         runEndToEndCase("random N=" + std::to_string(n), keys, indices,

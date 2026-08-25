@@ -43,6 +43,23 @@ gtest_discover_tests(
 # target is more robust than repeating the option because it verifies that the
 # library was actually created.
 if(TARGET nbody::cuda)
+    # WSL exposes the Windows NVIDIA driver through /usr/lib/wsl/lib. The CUDA
+    # runtime may otherwise resolve a Linux stub libcuda first, causing every
+    # GPU test to report that no CUDA-capable device is available. Apply this
+    # only when the WSL driver library is actually present, so native Linux and
+    # cluster environments remain unchanged.
+    set(NBODY_CUDA_TEST_ENVIRONMENT_MODIFICATION "")
+    if(
+        CMAKE_SYSTEM_NAME STREQUAL "Linux"
+        AND EXISTS "/usr/lib/wsl/lib/libcuda.so.1")
+        set(
+            NBODY_CUDA_TEST_ENVIRONMENT_MODIFICATION
+            "LD_LIBRARY_PATH=path_list_prepend:/usr/lib/wsl/lib")
+        message(
+            STATUS
+            "WSL CUDA driver detected: CTest will prepend /usr/lib/wsl/lib to LD_LIBRARY_PATH")
+    endif()
+
     # Define one CUDA GoogleTest executable and register all of its cases.
     # Usage inside this file:
     #   add_nbody_cuda_test_target(<target> <label> <source> [<source> ...])
@@ -76,14 +93,23 @@ if(TARGET nbody::cuda)
         # GPU test executables named "nbody_gpu" so concurrent CTest workers do
         # not contend for the same device. Run CTest with -L cuda-unit or
         # -L cuda-integration to select one group.
+        set(
+            cuda_test_properties
+            LABELS "cuda-${label}"
+            RESOURCE_LOCK "nbody_gpu"
+            TIMEOUT 300)
+        if(NBODY_CUDA_TEST_ENVIRONMENT_MODIFICATION)
+            list(
+                APPEND cuda_test_properties
+                ENVIRONMENT_MODIFICATION
+                "${NBODY_CUDA_TEST_ENVIRONMENT_MODIFICATION}")
+        endif()
+
         gtest_discover_tests(
             ${target}
             DISCOVERY_MODE PRE_TEST
             TEST_PREFIX "cuda.${label}."
-            PROPERTIES
-                LABELS "cuda-${label}"
-                RESOURCE_LOCK "nbody_gpu"
-                TIMEOUT 300)
+            PROPERTIES ${cuda_test_properties})
         # Remember each CUDA executable for the optional sanitizer loop below.
         set_property(
             GLOBAL APPEND PROPERTY NBODY_CUDA_TEST_TARGETS ${target})
@@ -94,6 +120,7 @@ if(TARGET nbody::cuda)
         nbody_cuda_unit_tests
         unit
         unit/cuda/globalbounding_test.cu
+        unit/cuda/morton_test.cu
         unit/cuda/morton_leaf_groups_test.cu
         unit/cuda/tree_builder_test.cu)
 
@@ -128,15 +155,24 @@ if(TARGET nbody::cuda)
                 NAME "sanitizer.${target}"
                 COMMAND
                     ${COMPUTE_SANITIZER_EXECUTABLE}
+                    --error-exitcode 1
                     --tool memcheck
                     --leak-check full
                     $<TARGET_FILE:${target}>)
+            set(
+                sanitizer_test_properties
+                LABELS "cuda-sanitizer"
+                RESOURCE_LOCK "nbody_gpu"
+                TIMEOUT 900)
+            if(NBODY_CUDA_TEST_ENVIRONMENT_MODIFICATION)
+                list(
+                    APPEND sanitizer_test_properties
+                    ENVIRONMENT_MODIFICATION
+                    "${NBODY_CUDA_TEST_ENVIRONMENT_MODIFICATION}")
+            endif()
             set_tests_properties(
                 "sanitizer.${target}"
-                PROPERTIES
-                    LABELS "cuda-sanitizer"
-                    RESOURCE_LOCK "nbody_gpu"
-                    TIMEOUT 900)
+                PROPERTIES ${sanitizer_test_properties})
         endforeach()
     endif()
 endif()

@@ -27,10 +27,11 @@
 *.lib
 
 # CMake and generated test output
-/build*/
+build*/
 /cmake-build-*/
 /Testing/
 /ci-results/
+/test/build/
 *.exe
 *.out
 *.app
