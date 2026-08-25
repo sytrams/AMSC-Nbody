@@ -393,10 +393,33 @@ jobs:
             exit 1
           fi
 
+          # Publish an explicit status marker. This is more reliable than using
+          # only the SSH process status after a long-running remote session.
+          printf 'NBODY_CI_TEST_EXIT_CODE=%s\n' "$test_exit_code"
           exit "$test_exit_code"
           REMOTE_SCRIPT
           } 2>&1 | tee "$results_path/orchestration.log"
-          test_status=${PIPESTATUS[0]}
+          ssh_status=${PIPESTATUS[0]}
+
+          reported_test_status="$(
+            sed -n \
+              's/^NBODY_CI_TEST_EXIT_CODE=\([0-9][0-9]*\)$/\1/p' \
+              "$results_path/orchestration.log" \
+              | tail -n 1
+          )"
+
+          if [[ "$reported_test_status" =~ ^[0-9]+$ ]]; then
+            test_status="$reported_test_status"
+            if (( ssh_status != test_status )); then
+              printf \
+                'SSH returned %s after the remote job reported test status %s; using the explicit test status.\n' \
+                "$ssh_status" "$test_status" >&2
+            fi
+          else
+            echo "Remote test status marker was not received" >&2
+            test_status="$ssh_status"
+          fi
+
           set -e
           exit "$test_status"
 
