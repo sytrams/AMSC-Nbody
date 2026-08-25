@@ -128,7 +128,7 @@ __global__ void buildTreeKernel(Tree tree, const std::uint32_t* keys, int N)
     tree.parent[rightChild] = currentNode;
 }
 
-__global__ void initializeLeavesKernel(Tree tree, const std::uint32_t* sortedIndices, const float* particleMass, const float* positionX, const float* positionY, const float* positionZ, int N)
+__global__ void initializeLeavesKernel(Tree tree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, int N)
 {
     const int leaf = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -144,7 +144,7 @@ __global__ void initializeLeavesKernel(Tree tree, const std::uint32_t* sortedInd
     tree.comZ[leaf] = positionZ[particleIndex];
 }
 
-__global__ void initializeGroupedLeavesKernel(Tree tree, const int* firstParticle, const int* particleCount, int nGroups, const std::uint32_t* sortedIndices, const float* particleMass, const float* positionX, const float* positionY, const float* positionZ)
+__global__ void initializeGroupedLeavesKernel(Tree tree, const int* firstParticle, const int* particleCount, int nGroups, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ)
 {
     const int group =static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -154,10 +154,10 @@ __global__ void initializeGroupedLeavesKernel(Tree tree, const int* firstParticl
     const int first = firstParticle[group];
     const int count = particleCount[group];
 
-    float totalMass = 0.0f;
-    float weightedX = 0.0f;
-    float weightedY = 0.0f;
-    float weightedZ = 0.0f;
+    double totalMass = 0.0f;
+    double weightedX = 0.0f;
+    double weightedY = 0.0f;
+    double weightedZ = 0.0f;
 
     for (int localParticle = 0; localParticle < count; ++localParticle)
     {
@@ -165,7 +165,7 @@ __global__ void initializeGroupedLeavesKernel(Tree tree, const int* firstParticl
 
         const std::uint32_t particleIndex = sortedIndices[sortedPosition];
 
-        const float mass = particleMass[particleIndex];
+        const double mass = particleMass[particleIndex];
 
         totalMass += mass;
 
@@ -180,7 +180,7 @@ __global__ void initializeGroupedLeavesKernel(Tree tree, const int* firstParticl
 
     if (totalMass > 0.0f)
     {
-        const float inverseMass = 1.0f / totalMass;
+        const double inverseMass = 1.0f / totalMass;
 
         tree.comX[group] = weightedX * inverseMass;
 
@@ -221,14 +221,14 @@ __global__ void computeCentersOfMassKernel(Tree tree, int N)
         //the second child finds both subtrees ready
         const int leftChild = tree.left[parentIndex];
         const int rightChild = tree.right[parentIndex];
-        const float leftMass = tree.mass[leftChild];
-        const float rightMass = tree.mass[rightChild];
-        const float totalMass = leftMass + rightMass;
+        const double leftMass = tree.mass[leftChild];
+        const double rightMass = tree.mass[rightChild];
+        const double totalMass = leftMass + rightMass;
         tree.mass[parentNode] = totalMass;
 
         if (totalMass > 0.0f)
         {
-            const float inverseMass = 1.0f / totalMass; //inverse of the mass to multiply directly fo all the dimensions
+            const double inverseMass = 1.0f / totalMass; //inverse of the mass to multiply directly fo all the dimensions
 
             tree.comX[parentNode] = (leftMass * tree.comX[leftChild] + rightMass * tree.comX[rightChild]) * inverseMass;
 
@@ -394,7 +394,7 @@ void buildTreeFromMortonGroups(Tree& tree, const MortonLeafGroups& groups)
     buildTree(tree, groups.uniqueKeys, groups.nGroups);
 }
 
-void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, const float* d_mass, const float* d_positionX, const float* d_positionY, const float* d_positionZ, int N)
+void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ, int N)
 {
     if (N <= 0)
         throw std::invalid_argument("computeCentersOfMass requires N >= 1");
@@ -451,7 +451,7 @@ void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, cons
         throw std::runtime_error(std::string("computeCenterOfMassKernel execution failed: ") + cudaGetErrorString(error));
 }
 
-void computeGroupedCenterOfMass(Tree& tree, const MortonLeafGroups& groups, const std::uint32_t* d_sortedIndices, const float* d_mass, const float* d_positionX, const float* d_positionY, const float* d_positionZ)
+void computeGroupedCenterOfMass(Tree& tree, const MortonLeafGroups& groups, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ)
 {
     if (groups.nParticles <= 0)
         throw std::invalid_argument("computeGroupedCenterOfMass requires at least one particle");

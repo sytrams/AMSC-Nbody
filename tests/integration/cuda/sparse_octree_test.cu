@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
-#include <iostream>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -29,14 +28,6 @@ void checkCuda(
             " failed: " +
             cudaGetErrorString(error));
     }
-}
-
-void require(
-    bool condition,
-    const std::string& message)
-{
-    if (!condition)
-        throw std::runtime_error(message);
 }
 
 template <typename T>
@@ -204,21 +195,20 @@ void validateTopology(
     const HostOctree& tree,
     int nNodes)
 {
-    require(
-        nNodes > 0,
-        "Octree contains no nodes");
+    ASSERT_GT(nNodes, 0) << "Octree contains no nodes";
 
-    require(
-        tree.level[0] == 0,
-        "Root level must be zero");
+    ASSERT_EQ(static_cast<int>(tree.level.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.prefix.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.parent.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.firstParticle.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.particleCount.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.children.size()), nNodes * 8);
 
-    require(
-        tree.prefix[0] == 0u,
-        "Root prefix must be zero");
+    EXPECT_EQ(tree.level[0], 0) << "Root level must be zero";
 
-    require(
-        tree.parent[0] == -1,
-        "Root parent must be -1");
+    EXPECT_EQ(tree.prefix[0], 0u) << "Root prefix must be zero";
+
+    EXPECT_EQ(tree.parent[0], -1) << "Root parent must be -1";
 
     std::vector<int> incoming(
         static_cast<std::size_t>(nNodes),
@@ -228,19 +218,15 @@ void validateTopology(
          node < nNodes;
          ++node)
     {
-        require(
-            tree.level[node] >= 0 &&
+        EXPECT_TRUE(tree.level[node] >= 0 &&
             tree.level[node] <=
-                kOctreeMaxLevel,
-            "Invalid octree level");
+                kOctreeMaxLevel) << "Invalid octree level";
 
-        require(
-            tree.prefix[node] ==
+        EXPECT_TRUE(tree.prefix[node] ==
                 prefixAtLevel(
                     tree.prefix[node],
-                    tree.level[node]),
-            "Octree prefix contains bits "
-            "below its level");
+                    tree.level[node])) << "Octree prefix contains bits "
+            "below its level";
 
         for (int octant = 0;
              octant < 8;
@@ -254,53 +240,38 @@ void validateTopology(
             if (child == -1)
                 continue;
 
-            require(
-                child > 0 &&
-                child < nNodes,
-                "Child ID outside octree");
+            ASSERT_GT(child, 0) << "Child ID outside octree";
+            ASSERT_LT(child, nNodes) << "Child ID outside octree";
 
-            require(
-                tree.parent[child] ==
-                    node,
-                "Child parent pointer "
-                "does not point back");
+            EXPECT_EQ(tree.parent[child], node)
+                << "Child parent pointer does not point back";
 
-            require(
-                tree.level[child] ==
-                    tree.level[node] + 1,
-                "Octree edge skips a level");
+            EXPECT_TRUE(tree.level[child] ==
+                    tree.level[node] + 1) << "Octree edge skips a level";
 
-            require(
-                octantAtLevel(
+            EXPECT_TRUE(octantAtLevel(
                     tree.prefix[child],
                     tree.level[child]) ==
-                    octant,
-                "Child stored in wrong octant");
+                    octant) << "Child stored in wrong octant";
 
-            require(
-                prefixAtLevel(
+            EXPECT_TRUE(prefixAtLevel(
                     tree.prefix[child],
                     tree.level[node]) ==
-                    tree.prefix[node],
-                "Child prefix does not extend "
-                "parent prefix");
+                    tree.prefix[node]) << "Child prefix does not extend "
+                "parent prefix";
 
             ++incoming[child];
         }
     }
 
-    require(
-        incoming[0] == 0,
-        "Root has an incoming edge");
+    EXPECT_EQ(incoming[0], 0) << "Root has an incoming edge";
 
     for (int node = 1;
          node < nNodes;
          ++node)
     {
-        require(
-            incoming[node] == 1,
-            "Non-root node does not have "
-            "exactly one incoming edge");
+        EXPECT_EQ(incoming[node], 1)
+            << "Non-root node does not have exactly one incoming edge";
     }
 
     std::vector<int> visited(
@@ -312,9 +283,10 @@ void validateTopology(
     std::function<void(int)> visit =
         [&](int node)
     {
-        require(
-            visited[node] == 0,
-            "Cycle or repeated octree node");
+        ASSERT_GE(node, 0);
+        ASSERT_LT(node, nNodes);
+        ASSERT_EQ(visited[node], 0)
+            << "Cycle or repeated octree node";
 
         visited[node] = 1;
         ++visitedCount;
@@ -335,25 +307,20 @@ void validateTopology(
 
     visit(0);
 
-    require(
-        visitedCount == nNodes,
-        "Some octree nodes are unreachable "
-        "from the root");
+    EXPECT_EQ(visitedCount, nNodes)
+        << "Some octree nodes are unreachable from the root";
 }
 
 void runCase(
     const std::string& name,
     const std::vector<std::uint32_t>& sortedKeys)
 {
-    require(
-        !sortedKeys.empty(),
-        name + ": empty input");
+    ASSERT_FALSE(sortedKeys.empty()) << name + ": empty input";
 
-    require(
-        std::is_sorted(
-            sortedKeys.begin(),
-            sortedKeys.end()),
-        name + ": keys are not sorted");
+    ASSERT_TRUE(std::is_sorted(
+        sortedKeys.begin(),
+        sortedKeys.end()))
+        << name + ": keys are not sorted";
 
     DeviceArray<std::uint32_t>
         deviceKeys(sortedKeys);
@@ -362,6 +329,14 @@ void runCase(
     Tree radixTree{};
     RadixToOctreePlan plan{};
     Octree octree{};
+
+    const auto cleanup = [&]()
+    {
+        freeOctree(octree);
+        freeRadixToOctreePlan(plan);
+        freeTree(radixTree);
+        freeMortonLeafGroups(groups);
+    };
 
     try
     {
@@ -405,28 +380,13 @@ void runCase(
             groups,
             plan);
 
-        require(
-            octree.root == 0,
-            name +
-            ": root index is not zero");
+        EXPECT_EQ(octree.root, 0) << name + ": root index is not zero";
 
-        require(
-            octree.nNodes ==
-                plan.nOctreeNodes,
-            name +
-            ": wrong node count");
+        EXPECT_EQ(octree.nNodes, plan.nOctreeNodes) << name + ": wrong node count";
 
-        require(
-            octree.nLeaves ==
-                groups.nGroups,
-            name +
-            ": wrong occupied leaf count");
+        EXPECT_EQ(octree.nLeaves, groups.nGroups) << name + ": wrong occupied leaf count";
 
-        require(
-            octree.nParticles ==
-                nParticles,
-            name +
-            ": wrong particle count");
+        EXPECT_EQ(octree.nParticles, nParticles) << name + ": wrong particle count";
 
         const HostOctree host =
             copyOctree(octree);
@@ -434,6 +394,12 @@ void runCase(
         validateTopology(
             host,
             octree.nNodes);
+
+        if (::testing::Test::HasFatalFailure())
+        {
+            cleanup();
+            return;
+        }
 
         /*
          * Copy group metadata so we can independently
@@ -486,23 +452,16 @@ void runCase(
         {
             if (host.particleCount[node] <= 0)
             {
-                require(
-                    host.firstParticle[node] == -1,
-                    name +
-                    ": non-leaf contains particle "
-                    "metadata");
+                EXPECT_EQ(host.firstParticle[node], -1)
+                    << name + ": non-leaf contains particle metadata";
 
                 continue;
             }
 
             ++occupiedLeaves;
 
-            require(
-                host.level[node] ==
-                    kOctreeMaxLevel,
-                name +
-                ": occupied leaf is not "
-                "at level 10");
+            EXPECT_EQ(host.level[node], kOctreeMaxLevel)
+                << name + ": occupied leaf is not at level 10";
 
             bool matched = false;
 
@@ -516,54 +475,31 @@ void runCase(
                     continue;
                 }
 
-                require(
-                    host.firstParticle[node] ==
-                        firstParticle[group],
-                    name +
-                    ": incorrect leaf offset");
+                EXPECT_EQ(host.firstParticle[node], firstParticle[group])
+                    << name + ": incorrect leaf offset";
 
-                require(
-                    host.particleCount[node] ==
-                        particleCount[group],
-                    name +
-                    ": incorrect leaf count");
+                EXPECT_EQ(host.particleCount[node], particleCount[group])
+                    << name + ": incorrect leaf count";
 
                 matched = true;
                 break;
             }
 
-            require(
-                matched,
-                name +
+            EXPECT_TRUE(matched) << name +
                 ": occupied leaf does not "
-                "correspond to a Morton group");
+                "correspond to a Morton group";
         }
 
-        require(
-            occupiedLeaves ==
-                groups.nGroups,
-            name +
-            ": not every Morton group "
-            "has one occupied leaf");
+        EXPECT_EQ(occupiedLeaves, groups.nGroups)
+            << name + ": not every Morton group has one occupied leaf";
     }
     catch (...)
     {
-        freeOctree(octree);
-        freeRadixToOctreePlan(plan);
-        freeTree(radixTree);
-        freeMortonLeafGroups(groups);
+        cleanup();
         throw;
     }
 
-    freeOctree(octree);
-    freeRadixToOctreePlan(plan);
-    freeTree(radixTree);
-    freeMortonLeafGroups(groups);
-
-    std::cout
-        << "[PASS] "
-        << name
-        << '\n';
+    cleanup();
 }
 
 void testRandom()

@@ -4,7 +4,6 @@
 #include <algorithm>
 #include <cstdint>
 #include <functional>
-#include <iostream>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -33,38 +32,17 @@ void checkCuda(
     }
 }
 
-void require(
-    bool condition,
-    const std::string& message)
+void expectRelativeNear(
+    double actual,
+    double expected,
+    const std::string& label)
 {
-    if (!condition)
-        throw std::runtime_error(message);
-}
+    constexpr double relativeTolerance = 1.0e-5;
+    const double scale =
+        std::max({1.0, std::abs(actual), std::abs(expected)});
 
-void requireNear(
-    float actual,
-    float expected,
-    const std::string& message)
-{
-    constexpr float tolerance = 1.0e-5f;
-
-    const float scale =
-        std::max(
-            1.0f,
-            std::max(
-                std::abs(actual),
-                std::abs(expected)));
-
-    if (std::abs(actual - expected) >
-        tolerance * scale)
-    {
-        throw std::runtime_error(
-            message +
-            ": expected " +
-            std::to_string(expected) +
-            ", got " +
-            std::to_string(actual));
-    }
+    EXPECT_NEAR(actual, expected, relativeTolerance * scale)
+        << label;
 }
 
 template <typename T>
@@ -161,10 +139,10 @@ struct HostOctree
     std::vector<int> firstParticle;
     std::vector<int> particleCount;
 
-    std::vector<float> mass;
-    std::vector<float> comX;
-    std::vector<float> comY;
-    std::vector<float> comZ;
+    std::vector<double> mass;
+    std::vector<double> comX;
+    std::vector<double> comY;
+    std::vector<double> comZ;
 
     std::vector<int> pendingChildren;
     std::vector<int> childCount;
@@ -246,7 +224,7 @@ HostOctree copyOctree(
         cudaMemcpy(
             host.mass.data(),
             octree.mass,
-            n * sizeof(float),
+            n * sizeof(double),
             cudaMemcpyDeviceToHost),
         "copy octree mass");
 
@@ -254,7 +232,7 @@ HostOctree copyOctree(
         cudaMemcpy(
             host.comX.data(),
             octree.comX,
-            n * sizeof(float),
+            n * sizeof(double),
             cudaMemcpyDeviceToHost),
         "copy octree comX");
 
@@ -262,7 +240,7 @@ HostOctree copyOctree(
         cudaMemcpy(
             host.comY.data(),
             octree.comY,
-            n * sizeof(float),
+            n * sizeof(double),
             cudaMemcpyDeviceToHost),
         "copy octree comY");
 
@@ -270,7 +248,7 @@ HostOctree copyOctree(
         cudaMemcpy(
             host.comZ.data(),
             octree.comZ,
-            n * sizeof(float),
+            n * sizeof(double),
             cudaMemcpyDeviceToHost),
         "copy octree comZ");
 
@@ -297,21 +275,26 @@ void validateTopology(
     const HostOctree& tree,
     int nNodes)
 {
-    require(
-        nNodes > 0,
-        "Octree contains no nodes");
+    ASSERT_GT(nNodes, 0) << "Octree contains no nodes";
 
-    require(
-        tree.level[0] == 0,
-        "Root level must be zero");
+    ASSERT_EQ(static_cast<int>(tree.level.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.prefix.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.parent.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.firstParticle.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.particleCount.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.children.size()), nNodes * 8);
+    ASSERT_EQ(static_cast<int>(tree.mass.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.comX.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.comY.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.comZ.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.pendingChildren.size()), nNodes);
+    ASSERT_EQ(static_cast<int>(tree.childCount.size()), nNodes);
 
-    require(
-        tree.prefix[0] == 0u,
-        "Root prefix must be zero");
+    EXPECT_EQ(tree.level[0], 0) << "Root level must be zero";
 
-    require(
-        tree.parent[0] == -1,
-        "Root parent must be -1");
+    EXPECT_EQ(tree.prefix[0], 0u) << "Root prefix must be zero";
+
+    EXPECT_EQ(tree.parent[0], -1) << "Root parent must be -1";
 
     std::vector<int> incoming(
         static_cast<std::size_t>(nNodes),
@@ -321,19 +304,15 @@ void validateTopology(
          node < nNodes;
          ++node)
     {
-        require(
-            tree.level[node] >= 0 &&
+        EXPECT_TRUE(tree.level[node] >= 0 &&
             tree.level[node] <=
-                kOctreeMaxLevel,
-            "Invalid octree level");
+                kOctreeMaxLevel) << "Invalid octree level";
 
-        require(
-            tree.prefix[node] ==
+        EXPECT_TRUE(tree.prefix[node] ==
                 prefixAtLevel(
                     tree.prefix[node],
-                    tree.level[node]),
-            "Octree prefix contains bits "
-            "below its level");
+                    tree.level[node])) << "Octree prefix contains bits "
+            "below its level";
 
         for (int octant = 0;
              octant < 8;
@@ -347,53 +326,38 @@ void validateTopology(
             if (child == -1)
                 continue;
 
-            require(
-                child > 0 &&
-                child < nNodes,
-                "Child ID outside octree");
+            ASSERT_GT(child, 0) << "Child ID outside octree";
+            ASSERT_LT(child, nNodes) << "Child ID outside octree";
 
-            require(
-                tree.parent[child] ==
-                    node,
-                "Child parent pointer "
-                "does not point back");
+            EXPECT_EQ(tree.parent[child], node)
+                << "Child parent pointer does not point back";
 
-            require(
-                tree.level[child] ==
-                    tree.level[node] + 1,
-                "Octree edge skips a level");
+            EXPECT_TRUE(tree.level[child] ==
+                    tree.level[node] + 1) << "Octree edge skips a level";
 
-            require(
-                octantAtLevel(
+            EXPECT_TRUE(octantAtLevel(
                     tree.prefix[child],
                     tree.level[child]) ==
-                    octant,
-                "Child stored in wrong octant");
+                    octant) << "Child stored in wrong octant";
 
-            require(
-                prefixAtLevel(
+            EXPECT_TRUE(prefixAtLevel(
                     tree.prefix[child],
                     tree.level[node]) ==
-                    tree.prefix[node],
-                "Child prefix does not extend "
-                "parent prefix");
+                    tree.prefix[node]) << "Child prefix does not extend "
+                "parent prefix";
 
             ++incoming[child];
         }
     }
 
-    require(
-        incoming[0] == 0,
-        "Root has an incoming edge");
+    EXPECT_EQ(incoming[0], 0) << "Root has an incoming edge";
 
     for (int node = 1;
          node < nNodes;
          ++node)
     {
-        require(
-            incoming[node] == 1,
-            "Non-root node does not have "
-            "exactly one incoming edge");
+        EXPECT_EQ(incoming[node], 1)
+            << "Non-root node does not have exactly one incoming edge";
     }
 
     std::vector<int> visited(
@@ -405,9 +369,10 @@ void validateTopology(
     std::function<void(int)> visit =
         [&](int node)
     {
-        require(
-            visited[node] == 0,
-            "Cycle or repeated octree node");
+        ASSERT_GE(node, 0);
+        ASSERT_LT(node, nNodes);
+        ASSERT_EQ(visited[node], 0)
+            << "Cycle or repeated octree node";
 
         visited[node] = 1;
         ++visitedCount;
@@ -428,10 +393,8 @@ void validateTopology(
 
     visit(0);
 
-    require(
-        visitedCount == nNodes,
-        "Some octree nodes are unreachable "
-        "from the root");
+    EXPECT_EQ(visitedCount, nNodes)
+        << "Some octree nodes are unreachable from the root";
 }
 
 void validatePhysics(
@@ -439,11 +402,18 @@ void validatePhysics(
     int nNodes,
     int nParticles,
     const std::vector<std::uint32_t>& sortedIndices,
-    const std::vector<float>& particleMass,
-    const std::vector<float>& positionX,
-    const std::vector<float>& positionY,
-    const std::vector<float>& positionZ)
+    const std::vector<double>& particleMass,
+    const std::vector<double>& positionX,
+    const std::vector<double>& positionY,
+    const std::vector<double>& positionZ)
 {
+    ASSERT_GT(nNodes, 0);
+    ASSERT_EQ(static_cast<int>(sortedIndices.size()), nParticles);
+    ASSERT_EQ(static_cast<int>(particleMass.size()), nParticles);
+    ASSERT_EQ(static_cast<int>(positionX.size()), nParticles);
+    ASSERT_EQ(static_cast<int>(positionY.size()), nParticles);
+    ASSERT_EQ(static_cast<int>(positionZ.size()), nParticles);
+
     /*
      * 1. Check every occupied leaf independently
      *    from the original particle data.
@@ -455,13 +425,9 @@ void validatePhysics(
         if (tree.particleCount[node] <= 0)
             continue;
 
-        require(
-            tree.childCount[node] == 0,
-            "Occupied leaf has children");
+        EXPECT_EQ(tree.childCount[node], 0) << "Occupied leaf has children";
 
-        require(
-            tree.pendingChildren[node] == 0,
-            "Occupied leaf has pending children");
+        EXPECT_EQ(tree.pendingChildren[node], 0) << "Occupied leaf has pending children";
 
         const int first =
             tree.firstParticle[node];
@@ -469,15 +435,15 @@ void validatePhysics(
         const int count =
             tree.particleCount[node];
 
-        require(
-            first >= 0 &&
-            first + count <= nParticles,
-            "Invalid occupied-leaf particle range");
+        ASSERT_GE(first, 0) << "Invalid occupied-leaf particle range";
+        ASSERT_GT(count, 0) << "Invalid occupied-leaf particle count";
+        ASSERT_LE(first + count, nParticles)
+            << "Invalid occupied-leaf particle range";
 
-        float expectedMass = 0.0f;
-        float weightedX = 0.0f;
-        float weightedY = 0.0f;
-        float weightedZ = 0.0f;
+        double expectedMass = 0.0f;
+        double weightedX = 0.0f;
+        double weightedY = 0.0f;
+        double weightedZ = 0.0f;
 
         for (int local = 0;
              local < count;
@@ -489,13 +455,12 @@ void validatePhysics(
             const std::uint32_t particle =
                 sortedIndices[sortedPosition];
 
-            require(
-                particle <
-                    static_cast<std::uint32_t>(
-                        nParticles),
-                "Invalid sorted particle index");
+            ASSERT_LT(
+                particle,
+                static_cast<std::uint32_t>(nParticles))
+                << "Invalid sorted particle index";
 
-            const float mass =
+            const double mass =
                 particleMass[particle];
 
             expectedMass += mass;
@@ -510,44 +475,23 @@ void validatePhysics(
                 mass * positionZ[particle];
         }
 
-        requireNear(
-            tree.mass[node],
-            expectedMass,
-            "Incorrect leaf mass");
+        expectRelativeNear(tree.mass[node], expectedMass, "Incorrect leaf mass");
 
         if (expectedMass > 0.0f)
         {
-            requireNear(
-                tree.comX[node],
-                weightedX / expectedMass,
-                "Incorrect leaf comX");
+            expectRelativeNear(tree.comX[node], weightedX / expectedMass, "Incorrect leaf comX");
 
-            requireNear(
-                tree.comY[node],
-                weightedY / expectedMass,
-                "Incorrect leaf comY");
+            expectRelativeNear(tree.comY[node], weightedY / expectedMass, "Incorrect leaf comY");
 
-            requireNear(
-                tree.comZ[node],
-                weightedZ / expectedMass,
-                "Incorrect leaf comZ");
+            expectRelativeNear(tree.comZ[node], weightedZ / expectedMass, "Incorrect leaf comZ");
         }
         else
         {
-            requireNear(
-                tree.comX[node],
-                0.0f,
-                "Zero-mass leaf comX");
+            expectRelativeNear(tree.comX[node], 0.0f, "Zero-mass leaf comX");
 
-            requireNear(
-                tree.comY[node],
-                0.0f,
-                "Zero-mass leaf comY");
+            expectRelativeNear(tree.comY[node], 0.0f, "Zero-mass leaf comY");
 
-            requireNear(
-                tree.comZ[node],
-                0.0f,
-                "Zero-mass leaf comZ");
+            expectRelativeNear(tree.comZ[node], 0.0f, "Zero-mass leaf comZ");
         }
     }
 
@@ -561,10 +505,10 @@ void validatePhysics(
     {
         int actualChildCount = 0;
 
-        float expectedMass = 0.0f;
-        float weightedX = 0.0f;
-        float weightedY = 0.0f;
-        float weightedZ = 0.0f;
+        double expectedMass = 0.0f;
+        double weightedX = 0.0f;
+        double weightedY = 0.0f;
+        double weightedZ = 0.0f;
 
         for (int octant = 0;
              octant < 8;
@@ -580,7 +524,7 @@ void validatePhysics(
 
             ++actualChildCount;
 
-            const float childMass =
+            const double childMass =
                 tree.mass[child];
 
             expectedMass +=
@@ -599,58 +543,32 @@ void validatePhysics(
                 tree.comZ[child];
         }
 
-        require(
-            tree.childCount[node] ==
-                actualChildCount,
-            "Incorrect childCount");
+        EXPECT_EQ(tree.childCount[node], actualChildCount)
+            << "Incorrect childCount";
 
         if (actualChildCount == 0)
             continue;
 
-        require(
-            tree.pendingChildren[node] ==
-                actualChildCount,
-            "Internal node did not receive "
-            "all child completions");
+        EXPECT_EQ(tree.pendingChildren[node], actualChildCount)
+            << "Internal node did not receive all child completions";
 
-        requireNear(
-            tree.mass[node],
-            expectedMass,
-            "Incorrect internal-node mass");
+        expectRelativeNear(tree.mass[node], expectedMass, "Incorrect internal-node mass");
 
         if (expectedMass > 0.0f)
         {
-            requireNear(
-                tree.comX[node],
-                weightedX / expectedMass,
-                "Incorrect internal comX");
+            expectRelativeNear(tree.comX[node], weightedX / expectedMass, "Incorrect internal comX");
 
-            requireNear(
-                tree.comY[node],
-                weightedY / expectedMass,
-                "Incorrect internal comY");
+            expectRelativeNear(tree.comY[node], weightedY / expectedMass, "Incorrect internal comY");
 
-            requireNear(
-                tree.comZ[node],
-                weightedZ / expectedMass,
-                "Incorrect internal comZ");
+            expectRelativeNear(tree.comZ[node], weightedZ / expectedMass, "Incorrect internal comZ");
         }
         else
         {
-            requireNear(
-                tree.comX[node],
-                0.0f,
-                "Zero-mass internal comX");
+            expectRelativeNear(tree.comX[node], 0.0f, "Zero-mass internal comX");
 
-            requireNear(
-                tree.comY[node],
-                0.0f,
-                "Zero-mass internal comY");
+            expectRelativeNear(tree.comY[node], 0.0f, "Zero-mass internal comY");
 
-            requireNear(
-                tree.comZ[node],
-                0.0f,
-                "Zero-mass internal comZ");
+            expectRelativeNear(tree.comZ[node], 0.0f, "Zero-mass internal comZ");
         }
     }
 
@@ -658,16 +576,16 @@ void validatePhysics(
      * 3. Completely independent reference calculation
      *    for the root from ALL original particles.
      */
-    float totalMass = 0.0f;
-    float weightedX = 0.0f;
-    float weightedY = 0.0f;
-    float weightedZ = 0.0f;
+    double totalMass = 0.0f;
+    double weightedX = 0.0f;
+    double weightedY = 0.0f;
+    double weightedZ = 0.0f;
 
     for (int particle = 0;
          particle < nParticles;
          ++particle)
     {
-        const float mass =
+        const double mass =
             particleMass[particle];
 
         totalMass += mass;
@@ -682,27 +600,15 @@ void validatePhysics(
             mass * positionZ[particle];
     }
 
-    requireNear(
-        tree.mass[0],
-        totalMass,
-        "Incorrect root mass");
+    expectRelativeNear(tree.mass[0], totalMass, "Incorrect root mass");
 
     if (totalMass > 0.0f)
     {
-        requireNear(
-            tree.comX[0],
-            weightedX / totalMass,
-            "Incorrect root comX");
+        expectRelativeNear(tree.comX[0], weightedX / totalMass, "Incorrect root comX");
 
-        requireNear(
-            tree.comY[0],
-            weightedY / totalMass,
-            "Incorrect root comY");
+        expectRelativeNear(tree.comY[0], weightedY / totalMass, "Incorrect root comY");
 
-        requireNear(
-            tree.comZ[0],
-            weightedZ / totalMass,
-            "Incorrect root comZ");
+        expectRelativeNear(tree.comZ[0], weightedZ / totalMass, "Incorrect root comZ");
     }
 }
 
@@ -710,15 +616,12 @@ void runCase(
     const std::string& name,
     const std::vector<std::uint32_t>& sortedKeys)
 {
-    require(
-        !sortedKeys.empty(),
-        name + ": empty input");
+    ASSERT_FALSE(sortedKeys.empty()) << name + ": empty input";
 
-    require(
-        std::is_sorted(
-            sortedKeys.begin(),
-            sortedKeys.end()),
-        name + ": keys are not sorted");
+    ASSERT_TRUE(std::is_sorted(
+        sortedKeys.begin(),
+        sortedKeys.end()))
+        << name + ": keys are not sorted";
 
     DeviceArray<std::uint32_t>
         deviceKeys(sortedKeys);
@@ -727,6 +630,14 @@ void runCase(
     Tree radixTree{};
     RadixToOctreePlan plan{};
     Octree octree{};
+
+    const auto cleanup = [&]()
+    {
+        freeOctree(octree);
+        freeRadixToOctreePlan(plan);
+        freeTree(radixTree);
+        freeMortonLeafGroups(groups);
+    };
 
     try
     {
@@ -765,19 +676,19 @@ void runCase(
                 sortedIndices.end());
         }
 
-        std::vector<float> mass(
+        std::vector<double> mass(
             static_cast<std::size_t>(
                 nParticles));
 
-        std::vector<float> positionX(
+        std::vector<double> positionX(
             static_cast<std::size_t>(
                 nParticles));
 
-        std::vector<float> positionY(
+        std::vector<double> positionY(
             static_cast<std::size_t>(
                 nParticles));
 
-        std::vector<float> positionZ(
+        std::vector<double> positionZ(
             static_cast<std::size_t>(
                 nParticles));
 
@@ -786,35 +697,35 @@ void runCase(
             ++i)
         {
             mass[i] =
-                static_cast<float>(i + 1);
+                static_cast<double>(i + 1);
 
             positionX[i] =
-                static_cast<float>(i);
+                static_cast<double>(i);
 
             positionY[i] =
-                static_cast<float>(2 * i);
+                static_cast<double>(2 * i);
 
             positionZ[i] =
-                static_cast<float>(-i);
+                static_cast<double>(-i);
         }
 
         DeviceArray<std::uint32_t>
             deviceSortedIndices(
                 sortedIndices);
 
-        DeviceArray<float>
+        DeviceArray<double>
             deviceMass(
                 mass);
 
-        DeviceArray<float>
+        DeviceArray<double>
             deviceX(
                 positionX);
 
-        DeviceArray<float>
+        DeviceArray<double>
             deviceY(
                 positionY);
 
-        DeviceArray<float>
+        DeviceArray<double>
             deviceZ(
                 positionZ);
 
@@ -865,28 +776,13 @@ void runCase(
             deviceY.get(),
             deviceZ.get());
 
-        require(
-            octree.root == 0,
-            name +
-            ": root index is not zero");
+        EXPECT_EQ(octree.root, 0) << name + ": root index is not zero";
 
-        require(
-            octree.nNodes ==
-                plan.nOctreeNodes,
-            name +
-            ": wrong node count");
+        EXPECT_EQ(octree.nNodes, plan.nOctreeNodes) << name + ": wrong node count";
 
-        require(
-            octree.nLeaves ==
-                groups.nGroups,
-            name +
-            ": wrong occupied leaf count");
+        EXPECT_EQ(octree.nLeaves, groups.nGroups) << name + ": wrong occupied leaf count";
 
-        require(
-            octree.nParticles ==
-                nParticles,
-            name +
-            ": wrong particle count");
+        EXPECT_EQ(octree.nParticles, nParticles) << name + ": wrong particle count";
 
         const HostOctree host =
             copyOctree(octree);
@@ -894,6 +790,12 @@ void runCase(
         validateTopology(
             host,
             octree.nNodes);
+
+        if (::testing::Test::HasFatalFailure())
+        {
+            cleanup();
+            return;
+        }
 
         validatePhysics(
             host,
@@ -904,6 +806,12 @@ void runCase(
             positionX,
             positionY,
             positionZ);
+
+        if (::testing::Test::HasFatalFailure())
+        {
+            cleanup();
+            return;
+        }
 
         /*
          * Copy group metadata so we can independently
@@ -956,23 +864,16 @@ void runCase(
         {
             if (host.particleCount[node] <= 0)
             {
-                require(
-                    host.firstParticle[node] == -1,
-                    name +
-                    ": non-leaf contains particle "
-                    "metadata");
+                EXPECT_EQ(host.firstParticle[node], -1)
+                    << name + ": non-leaf contains particle metadata";
 
                 continue;
             }
 
             ++occupiedLeaves;
 
-            require(
-                host.level[node] ==
-                    kOctreeMaxLevel,
-                name +
-                ": occupied leaf is not "
-                "at level 10");
+            EXPECT_EQ(host.level[node], kOctreeMaxLevel)
+                << name + ": occupied leaf is not at level 10";
 
             bool matched = false;
 
@@ -986,54 +887,31 @@ void runCase(
                     continue;
                 }
 
-                require(
-                    host.firstParticle[node] ==
-                        firstParticle[group],
-                    name +
-                    ": incorrect leaf offset");
+                EXPECT_EQ(host.firstParticle[node], firstParticle[group])
+                    << name + ": incorrect leaf offset";
 
-                require(
-                    host.particleCount[node] ==
-                        particleCount[group],
-                    name +
-                    ": incorrect leaf count");
+                EXPECT_EQ(host.particleCount[node], particleCount[group])
+                    << name + ": incorrect leaf count";
 
                 matched = true;
                 break;
             }
 
-            require(
-                matched,
-                name +
+            EXPECT_TRUE(matched) << name +
                 ": occupied leaf does not "
-                "correspond to a Morton group");
+                "correspond to a Morton group";
         }
 
-        require(
-            occupiedLeaves ==
-                groups.nGroups,
-            name +
-            ": not every Morton group "
-            "has one occupied leaf");
+        EXPECT_EQ(occupiedLeaves, groups.nGroups)
+            << name + ": not every Morton group has one occupied leaf";
     }
     catch (...)
     {
-        freeOctree(octree);
-        freeRadixToOctreePlan(plan);
-        freeTree(radixTree);
-        freeMortonLeafGroups(groups);
+        cleanup();
         throw;
     }
 
-    freeOctree(octree);
-    freeRadixToOctreePlan(plan);
-    freeTree(radixTree);
-    freeMortonLeafGroups(groups);
-
-    std::cout
-        << "[PASS] "
-        << name
-        << '\n';
+    cleanup();
 }
 
 void testRandom()

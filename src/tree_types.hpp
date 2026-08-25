@@ -14,10 +14,10 @@ struct Tree
 
     int* prefixLength = nullptr;
 
-    float* mass = nullptr;
-    float* comX = nullptr;
-    float* comY = nullptr;
-    float* comZ = nullptr;
+    double* mass = nullptr;
+    double* comX = nullptr;
+    double* comY = nullptr;
+    double* comZ = nullptr;
 
     int* visitCount = nullptr;
 };

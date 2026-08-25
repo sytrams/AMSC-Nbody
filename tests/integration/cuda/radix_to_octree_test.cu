@@ -3,7 +3,6 @@
 
 #include <algorithm>
 #include <cstdint>
-#include <iostream>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -28,41 +27,6 @@ void checkCuda(
     }
 }
 
-void require(
-    bool condition,
-    const std::string& message)
-{
-    if (!condition)
-        throw std::runtime_error(message);
-}
-
-template <typename T>
-void requireVectorEqual(
-    const std::vector<T>& actual,
-    const std::vector<T>& expected,
-    const std::string& label)
-{
-    require(
-        actual.size() == expected.size(),
-        label + ": vector sizes differ");
-
-    for (std::size_t i = 0;
-         i < actual.size();
-         ++i)
-    {
-        if (actual[i] != expected[i])
-        {
-            throw std::runtime_error(
-                label +
-                ": mismatch at index " +
-                std::to_string(i) +
-                ", expected " +
-                std::to_string(expected[i]) +
-                ", got " +
-                std::to_string(actual[i]));
-        }
-    }
-}
 
 template <typename T>
 class DeviceArray
@@ -128,15 +92,12 @@ void runExactCase(
     const std::vector<int>& expectedOffsets,
     int expectedOctreeNodes)
 {
-    require(
-        !sortedKeys.empty(),
-        name + ": empty key array");
+    ASSERT_FALSE(sortedKeys.empty()) << name + ": empty key array";
 
-    require(
-        std::is_sorted(
-            sortedKeys.begin(),
-            sortedKeys.end()),
-        name + ": keys are not sorted");
+    ASSERT_TRUE(std::is_sorted(
+        sortedKeys.begin(),
+        sortedKeys.end()))
+        << name + ": keys are not sorted";
 
     DeviceArray<std::uint32_t>
         deviceKeys(sortedKeys);
@@ -178,17 +139,11 @@ void runExactCase(
             tree,
             groups);
 
-        require(
-            plan.nRadixNodes ==
-                nRadixNodes,
-            name +
-            ": incorrect radix-node count");
+        EXPECT_EQ(plan.nRadixNodes, nRadixNodes)
+            << name + ": incorrect radix-node count";
 
-        require(
-            plan.nOctreeNodes ==
-                expectedOctreeNodes,
-            name +
-            ": incorrect octree-node count");
+        EXPECT_EQ(plan.nOctreeNodes, expectedOctreeNodes)
+            << name + ": incorrect octree-node count";
 
         std::vector<int> actualLevels(
             static_cast<std::size_t>(
@@ -231,55 +186,37 @@ void runExactCase(
                 cudaMemcpyDeviceToHost),
             "copy edge offsets");
 
-        requireVectorEqual(
-            actualLevels,
-            expectedLevels,
-            name + " radix levels");
+        EXPECT_EQ(actualLevels, expectedLevels) << name + " radix levels";
 
-        requireVectorEqual(
-            actualCounts,
-            expectedCounts,
-            name + " edge counts");
+        EXPECT_EQ(actualCounts, expectedCounts) << name + " edge counts";
 
-        requireVectorEqual(
-            actualOffsets,
-            expectedOffsets,
-            name + " edge offsets");
+        EXPECT_EQ(actualOffsets, expectedOffsets) << name + " edge offsets";
 
-        require(
-            actualOffsets[0] == 0,
-            name +
-            ": exclusive scan must start at zero");
+        EXPECT_EQ(actualOffsets[0], 0)
+            << name + ": exclusive scan must start at zero";
 
         for (int i = 1;
              i < nRadixNodes;
              ++i)
         {
-            require(
-                actualOffsets[i] ==
-                    actualOffsets[i - 1] +
-                    actualCounts[i - 1],
-                name +
-                ": offsets are not an exclusive scan");
+            EXPECT_EQ(
+                actualOffsets[i],
+                actualOffsets[i - 1] + actualCounts[i - 1])
+                << name + ": offsets are not an exclusive scan";
         }
 
         int generatedNodes = 0;
 
         for (int count : actualCounts)
         {
-            require(
-                count >= 0,
-                name +
-                ": negative edge-node count");
+            EXPECT_GE(count, 0)
+                << name + ": negative edge-node count";
 
             generatedNodes += count;
         }
 
-        require(
-            plan.nOctreeNodes ==
-                generatedNodes + 1,
-            name +
-            ": total octree count is inconsistent");
+        EXPECT_EQ(plan.nOctreeNodes, generatedNodes + 1)
+            << name + ": total octree count is inconsistent";
     }
     catch (...)
     {
@@ -292,11 +229,6 @@ void runExactCase(
     freeRadixToOctreePlan(plan);
     freeTree(tree);
     freeMortonLeafGroups(groups);
-
-    std::cout
-        << "[PASS] "
-        << name
-        << '\n';
 }
 
 void testInvalidThirtyBitLayout()
@@ -336,24 +268,12 @@ void testInvalidThirtyBitLayout()
             plan,
             2 * groups.nGroups - 1);
 
-        bool exceptionThrown = false;
-
-        try
-        {
+        EXPECT_THROW(
             buildRadixToOctreePlan(
                 plan,
                 tree,
-                groups);
-        }
-        catch (const std::runtime_error&)
-        {
-            exceptionThrown = true;
-        }
-
-        require(
-            exceptionThrown,
-            "The conversion accepted a key "
-            "outside the 30-bit Morton layout");
+                groups),
+            std::runtime_error);
     }
     catch (...)
     {
@@ -366,9 +286,6 @@ void testInvalidThirtyBitLayout()
     freeRadixToOctreePlan(plan);
     freeTree(tree);
     freeMortonLeafGroups(groups);
-
-    std::cout
-        << "[PASS] reject non-30-bit key\n";
 }
 
 } // namespace
