@@ -68,7 +68,7 @@ TEST_F(GlobalBoundingTest, ComputesCenterAndLongestCubeSide) {
   EXPECT_DOUBLE_EQ(values.center_x, 1.0);
   EXPECT_DOUBLE_EQ(values.center_y, 6.0);
   EXPECT_DOUBLE_EQ(values.center_z, 2.0);
-  EXPECT_DOUBLE_EQ(values.side, 16.0);
+  EXPECT_DOUBLE_EQ(values.side, 17.6);
 }
 
 TEST_F(GlobalBoundingTest, ExposesCenterAndSideInDeviceMemory) {
@@ -85,7 +85,7 @@ TEST_F(GlobalBoundingTest, ExposesCenterAndSideInDeviceMemory) {
   EXPECT_DOUBLE_EQ(device_values[0], 1.0);
   EXPECT_DOUBLE_EQ(device_values[1], 12.0);
   EXPECT_DOUBLE_EQ(device_values[2], 2.0);
-  EXPECT_DOUBLE_EQ(device_values[3], 6.0);
+  EXPECT_DOUBLE_EQ(device_values[3], 6.6);
 }
 
 TEST_F(GlobalBoundingTest, UsesPositiveSideForCoincidentParticles) {
@@ -116,7 +116,7 @@ TEST_F(GlobalBoundingTest, RecomputesAnExistingBox) {
   EXPECT_DOUBLE_EQ(values.center_x, 12.0);
   EXPECT_DOUBLE_EQ(values.center_y, 21.0);
   EXPECT_DOUBLE_EQ(values.center_z, 30.5);
-  EXPECT_DOUBLE_EQ(values.side, 4.0);
+  EXPECT_DOUBLE_EQ(values.side, 4.4);
 }
 
 TEST_F(GlobalBoundingTest, RejectsNanAndInfiniteCoordinates) {

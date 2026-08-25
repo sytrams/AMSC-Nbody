@@ -123,10 +123,11 @@ void Bbox::compute_box(const double *d_x, const double *d_y, const double *d_z,
   const double center_y = (result.ymin + result.ymax) * 0.5;
   const double center_z = (result.zmin + result.zmax) * 0.5;
 
-  // Use the longest axis so the resulting cube encloses all three axis-aligned
-  // ranges while remaining centered on the original bounding box.
-  double side = 1.1*std::max({result.xmax - result.xmin, result.ymax - result.ymin,
-                          result.zmax - result.zmin});
+  // Pad the longest axis by 10% so the resulting cube encloses all three
+  // axis-aligned ranges with room at its boundary.
+  double side =
+      1.1 * std::max({result.xmax - result.xmin, result.ymax - result.ymin,
+                      result.zmax - result.zmin});
 
   // A positive side keeps later Morton normalization well-defined when every
   // particle occupies the same point.
