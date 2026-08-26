@@ -159,6 +159,7 @@ if(NBODY_ENABLE_CUDA)
     add_library(
         nbody_cuda
         STATIC
+        gpu/cuda_kernels/barnes_hut.cu
         gpu/cuda_kernels/globalbounding.cu
         gpu/cuda_kernels/morton.cu
         gpu/cuda_kernels/morton_leaf_groups.cu

@@ -11,10 +11,6 @@
 #include <string>
 #include <vector>
 
-#include <thrust/device_ptr.h>
-#include <thrust/device_vector.h>
-#include <thrust/transform.h>
-
 #include "cuda_test.hpp"
 #include "morton.hpp"
 #include "morton_leaf_groups.hpp"
@@ -106,35 +102,37 @@ struct PipelineResources {
   }
 };
 
-struct ConvertToFloat {
-  __host__ __device__ float operator()(double value) const {
-    return static_cast<float>(value);
-  }
-};
+std::array<double, 4> copyRootPhysics(
+    const Octree& octree)
+{
+    std::array<double, 4> root{};
 
-thrust::device_vector<float> convertToFloat(const double *input,
-                                            std::size_t count) {
-  thrust::device_vector<float> output(count);
-  thrust::transform(thrust::device_pointer_cast(input),
-                    thrust::device_pointer_cast(input) + count, output.begin(),
-                    ConvertToFloat{});
-  return output;
-}
+    const std::array<const double*, 4> fields{
+        octree.mass,
+        octree.comX,
+        octree.comY,
+        octree.comZ};
 
-std::array<float, 4> copyRootPhysics(const Octree &octree) {
-  std::array<float, 4> root{};
-  const std::array<const float *, 4> fields{octree.mass, octree.comX,
-                                            octree.comY, octree.comZ};
+    for (std::size_t field = 0;
+         field < fields.size();
+         ++field)
+    {
+        const cudaError_t status =
+            cudaMemcpy(
+                &root[field],
+                fields[field],
+                sizeof(double),
+                cudaMemcpyDeviceToHost);
 
-  for (std::size_t field = 0; field < fields.size(); ++field) {
-    const cudaError_t status = cudaMemcpy(
-        &root[field], fields[field], sizeof(float), cudaMemcpyDeviceToHost);
-    if (status != cudaSuccess) {
-      throw std::runtime_error(std::string("copy octree root: ") +
-                               cudaGetErrorString(status));
+        if (status != cudaSuccess)
+        {
+            throw std::runtime_error(
+                std::string("copy octree root: ") +
+                cudaGetErrorString(status));
+        }
     }
-  }
-  return root;
+
+    return root;
 }
 
 std::array<double, 4> referenceRoot(const ParticleData &particles) {
@@ -189,15 +187,13 @@ TEST_F(ParticleOctreePipelineTest, ComputesRootFromLoadedParticles) {
                             resources.groups, resources.plan);
   allocateOctreePhysicalData(resources.octree);
 
-  auto mass = convertToFloat(particleView.mass, particleView.count);
-  auto x = convertToFloat(particleView.x, particleView.count);
-  auto y = convertToFloat(particleView.y, particleView.count);
-  auto z = convertToFloat(particleView.z, particleView.count);
-
   computeOctreeMassAndCenterOfMass(
-      resources.octree, morton.indices_device_data(),
-      thrust::raw_pointer_cast(mass.data()), thrust::raw_pointer_cast(x.data()),
-      thrust::raw_pointer_cast(y.data()), thrust::raw_pointer_cast(z.data()));
+      resources.octree,
+      morton.indices_device_data(),
+      particleView.mass,
+      particleView.x,
+      particleView.y,
+      particleView.z);
 
   const auto actualRoot = copyRootPhysics(resources.octree);
   const auto expectedRoot = referenceRoot(expectedParticles);

@@ -119,6 +119,7 @@ if(TARGET nbody::cuda)
     add_nbody_cuda_test_target(
         nbody_cuda_unit_tests
         unit
+        unit/cuda/barnes_hut_test.cu
         unit/cuda/globalbounding_test.cu
         unit/cuda/morton_test.cu
         unit/cuda/morton_leaf_groups_test.cu
