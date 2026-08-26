@@ -122,6 +122,7 @@ if(TARGET nbody::cuda)
         unit/cuda/globalbounding_test.cu
         unit/cuda/morton_test.cu
         unit/cuda/morton_leaf_groups_test.cu
+        unit/cuda/octree_geometry_test.cu
         unit/cuda/tree_builder_test.cu)
 
     # Tests that exercise several stages of the tree-building pipeline.

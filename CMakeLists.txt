@@ -163,6 +163,7 @@ if(NBODY_ENABLE_CUDA)
         gpu/cuda_kernels/morton.cu
         gpu/cuda_kernels/morton_leaf_groups.cu
         gpu/cuda_kernels/octree_builder.cu
+        gpu/cuda_kernels/octree_geometry.cu
         gpu/cuda_kernels/octree_physics.cu
         gpu/cuda_kernels/radix_to_octree.cu
         gpu/cuda_kernels/tree_builder.cu)
