@@ -419,6 +419,7 @@ jobs:
           cmake -S . -B build/all-tests \
             -DBUILD_TESTING=ON \
             -DNBODY_ENABLE_CUDA=ON \
+            -DNBODY_BUILD_SIMULATION=ON \
             -DNBODY_BUILD_VIEWER=OFF
           mark_stage "building the CMake test suite"
           cmake --build build/all-tests --parallel

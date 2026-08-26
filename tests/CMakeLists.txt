@@ -139,6 +139,42 @@ if(TARGET nbody::cuda)
         integration/cuda/simulation_test.cu
         integration/cuda/two_body_orbit_test.cu)
 
+    # Exercise the production executable as a separate process. The small
+    # helper writes a deterministic binary input without relying on Python or
+    # checking generated binary data into the repository.
+    if(TARGET nbody)
+        add_executable(
+            nbody_cli_fixture_writer
+            support/write_particle_fixture.cpp)
+        set_target_properties(
+            nbody_cli_fixture_writer
+            PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+
+        add_test(
+            NAME "cuda.integration.SimulationCliBehavior"
+            COMMAND
+                ${CMAKE_COMMAND}
+                "-DNBODY_CLI=$<TARGET_FILE:nbody>"
+                "-DNBODY_FIXTURE_WRITER=$<TARGET_FILE:nbody_cli_fixture_writer>"
+                "-DNBODY_TEST_DIRECTORY=${CMAKE_CURRENT_BINARY_DIR}/data"
+                -P
+                "${PROJECT_SOURCE_DIR}/tests/scripts/simulation_cli_test.cmake")
+        set(
+            simulation_cli_test_properties
+            LABELS "cuda-integration"
+            RESOURCE_LOCK "nbody_gpu"
+            TIMEOUT 300)
+        if(NBODY_CUDA_TEST_ENVIRONMENT_MODIFICATION)
+            list(
+                APPEND simulation_cli_test_properties
+                ENVIRONMENT_MODIFICATION
+                "${NBODY_CUDA_TEST_ENVIRONMENT_MODIFICATION}")
+        endif()
+        set_tests_properties(
+            "cuda.integration.SimulationCliBehavior"
+            PROPERTIES ${simulation_cli_test_properties})
+    endif()
+
     # Opt-in because memcheck is much slower than the normal suite. Configure
     # with -DNBODY_ENABLE_COMPUTE_SANITIZER_TESTS=ON, build, then run:
     #   ctest --test-dir build/cuda-tests -L cuda-sanitizer --output-on-failure

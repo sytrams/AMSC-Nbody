@@ -54,44 +54,35 @@ In our case, for an initial analysis, we began by studying the case in 2 dimensi
 
 </div>
 
-## particle.hpp
-This header file contains the principal implementation of the Verlet Integration that calculates and updates the values of the positions and velocities of the 2 bodies interacting with each other. It also defines the Particle class template and the fundamental particle we use to simulate the dynamics of a physical system.
+## Simulation executable
 
-## system.hpp
-This header file defines the gravitation_system class template, designed to simulate the dynamics of a system of N bodies (N-body problem) interacting with each other through the gravitational force, using the Verlet Integration algorithm and OpenMP parallelization.
+The CUDA simulation executable is opt-in and requires an NVIDIA CUDA toolkit.
+Configure and build it with:
 
-## vector.hpp
-This header file defines the Vector class template, an elementary linear algebra library for representing and manipulating fixed-dimensional (DIM) vectors.
-
-## main.cpp
-The main file manages the execution flow of the N-body simulation. Its purpose is to initialize the system with the correct spatial dimension, run the simulation over the specified time interval, and store the results. The positions of all particles (bodies) are saved every 20 iterations in an output file, which can then be used to visualize their trajectories.
-
-
-## How to use it
-In order to compile the program you have to run the make command inside the project root:
-```
-make
+```bash
+cmake -S . -B build/simulation -G Ninja \
+  -DBUILD_TESTING=OFF \
+  -DNBODY_ENABLE_CUDA=ON \
+  -DNBODY_BUILD_SIMULATION=ON \
+  -DNBODY_BUILD_VIEWER=OFF
+cmake --build build/simulation --target nbody --parallel
 ```
 
-Once the program is compiled, you can move into the build directory and run the executable file
-```
-cd build
-./nbody
+Run a fixed number of shared leapfrog timesteps with:
+
+```bash
+./build/simulation/nbody \
+  --input <initial-conditions.bin> \
+  --time-step <dt> \
+  --steps <count> \
+  --theta 0.5 \
+  --softening <length>
 ```
 
-The program takes in some input arguments, which are visible with the command
-```
-./nbody -h
-```
-```
-./nbody --help
-```
-
-Alternatively, you can compile and run the program by only using the command
-```
-make run args = "[options]"
-```
-The default option to execute with simple ```make run``` command is ```-f ../src/solar_system.txt``` that give to the simulaton the initilizarion for our Solar System.
+Use `./build/simulation/nbody --help` for the complete command-line help.
+The input must use the planar binary particle format documented below. The
+executable currently advances the particles in memory and reports timing and
+completion information; snapshot/checkpoint output is not implemented yet.
 
 ## Tests
 
@@ -125,6 +116,7 @@ cmake -S . -B build/cuda-tests \
   -G Ninja \
   -DBUILD_TESTING=ON \
   -DNBODY_ENABLE_CUDA=ON \
+  -DNBODY_BUILD_SIMULATION=ON \
   -DNBODY_BUILD_VIEWER=OFF
 cmake --build build/cuda-tests --parallel
 ctest --test-dir build/cuda-tests -L cuda --output-on-failure

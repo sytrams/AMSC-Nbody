@@ -1,6 +1,8 @@
 #include <cuda_runtime.h>
 #include <gtest/gtest.h>
 
+#include <algorithm>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
@@ -188,6 +190,96 @@ TEST_F(SimulationTest, AdvancesAnIsolatedParticleAtConstantVelocity) {
   EXPECT_DOUBLE_EQ(actualVx.front(), initial.vx.front());
   EXPECT_DOUBLE_EQ(actualVy.front(), initial.vy.front());
   EXPECT_DOUBLE_EQ(actualVz.front(), initial.vz.front());
+}
+
+TEST_F(SimulationTest, PreservesCircularTwoBodyOrbitThroughSimulationApi) {
+  constexpr double particleMass = 1.0e10;
+  constexpr double separation = 1.0;
+  constexpr std::size_t steps = 128;
+
+  const double orbitalVelocity =
+      std::sqrt(G * particleMass / (2.0 * separation));
+  const double angularVelocity = 2.0 * orbitalVelocity / separation;
+  const double orbitalPeriod = 2.0 * std::acos(-1.0) / angularVelocity;
+  const double timeStep = orbitalPeriod / static_cast<double>(steps);
+
+  const ParticleData initial{{particleMass, particleMass},
+                             {-0.5 * separation, 0.5 * separation},
+                             {0.0, 0.0},
+                             {0.0, 0.0},
+                             {0.0, 0.0},
+                             {-orbitalVelocity, orbitalVelocity},
+                             {0.0, 0.0}};
+  const TemporaryParticleFile file{initial};
+  auto simulation = loadSimulation(file.path(), {timeStep, 0.5, 0.0});
+
+  simulation->initialize();
+
+  const double initialEnergy =
+      particleMass * orbitalVelocity * orbitalVelocity -
+      G * particleMass * particleMass / separation;
+  double maximumRelativeEnergyError = 0.0;
+  double maximumSeparationError = 0.0;
+  double maximumCenterOfMassDrift = 0.0;
+
+  for (std::size_t step = 0; step < steps; ++step) {
+    simulation->step();
+
+    const DeviceParticlesView view = simulation->particles();
+    const auto x = copyDeviceValues(view.x, view.count);
+    const auto y = copyDeviceValues(view.y, view.count);
+    const auto z = copyDeviceValues(view.z, view.count);
+    const auto vx = copyDeviceValues(view.vx, view.count);
+    const auto vy = copyDeviceValues(view.vy, view.count);
+    const auto vz = copyDeviceValues(view.vz, view.count);
+
+    ASSERT_EQ(view.count, 2u);
+
+    const double dx = x[1] - x[0];
+    const double dy = y[1] - y[0];
+    const double dz = z[1] - z[0];
+    const double currentSeparation = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const double kineticEnergy =
+        0.5 * particleMass *
+        (vx[0] * vx[0] + vy[0] * vy[0] + vz[0] * vz[0] + vx[1] * vx[1] +
+         vy[1] * vy[1] + vz[1] * vz[1]);
+    const double potentialEnergy =
+        -G * particleMass * particleMass / currentSeparation;
+    const double relativeEnergyError = std::abs(
+        (kineticEnergy + potentialEnergy - initialEnergy) / initialEnergy);
+    const double centerX = 0.5 * (x[0] + x[1]);
+    const double centerY = 0.5 * (y[0] + y[1]);
+    const double centerZ = 0.5 * (z[0] + z[1]);
+
+    maximumRelativeEnergyError =
+        std::max(maximumRelativeEnergyError, relativeEnergyError);
+    maximumSeparationError = std::max(maximumSeparationError,
+                                      std::abs(currentSeparation - separation));
+    maximumCenterOfMassDrift = std::max(
+        maximumCenterOfMassDrift,
+        std::sqrt(centerX * centerX + centerY * centerY + centerZ * centerZ));
+  }
+
+  const DeviceParticlesView finalView = simulation->particles();
+  const auto finalX = copyDeviceValues(finalView.x, finalView.count);
+  const auto finalY = copyDeviceValues(finalView.y, finalView.count);
+  const auto finalVx = copyDeviceValues(finalView.vx, finalView.count);
+  const auto finalVy = copyDeviceValues(finalView.vy, finalView.count);
+
+  EXPECT_EQ(simulation->stepNumber(), steps);
+  EXPECT_NEAR(simulation->time(), orbitalPeriod, orbitalPeriod * 1.0e-13);
+  EXPECT_LT(maximumRelativeEnergyError, 5.0e-6);
+  EXPECT_LT(maximumSeparationError, 2.0e-3);
+  EXPECT_LT(maximumCenterOfMassDrift, 1.0e-12);
+
+  EXPECT_NEAR(finalX[0], initial.x[0], 3.0e-3);
+  EXPECT_NEAR(finalY[0], initial.y[0], 3.0e-3);
+  EXPECT_NEAR(finalX[1], initial.x[1], 3.0e-3);
+  EXPECT_NEAR(finalY[1], initial.y[1], 3.0e-3);
+  EXPECT_NEAR(finalVx[0], initial.vx[0], 3.0e-3);
+  EXPECT_NEAR(finalVy[0], initial.vy[0], 3.0e-3);
+  EXPECT_NEAR(finalVx[1], initial.vx[1], 3.0e-3);
+  EXPECT_NEAR(finalVy[1], initial.vy[1], 3.0e-3);
 }
 
 } // namespace

@@ -18,6 +18,13 @@
 #   cmake --build build/cuda-tests --parallel
 #   ctest --test-dir build/cuda-tests -L cuda --output-on-failure
 #
+# CUDA simulation executable:
+#   cmake -S . -B build/simulation -DBUILD_TESTING=OFF \
+#     -DNBODY_ENABLE_CUDA=ON -DNBODY_BUILD_SIMULATION=ON \
+#     -DNBODY_BUILD_VIEWER=OFF
+#   cmake --build build/simulation --target nbody --parallel
+#   ./build/simulation/nbody --help
+#
 # macOS Metal viewer:
 #   cmake -S . -B build/viewer -DBUILD_TESTING=OFF \
 #     -DNBODY_BUILD_VIEWER=ON
@@ -59,11 +66,18 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 # example, -DNBODY_ENABLE_CUDA=ON. CUDA is opt-in; the viewer defaults to ON
 # but is still built only on Apple platforms.
 option(NBODY_ENABLE_CUDA "Build CUDA code and tests" OFF)
+option(NBODY_BUILD_SIMULATION "Build the CUDA simulation executable" OFF)
 option(NBODY_BUILD_VIEWER "Build the macOS Metal viewer" ON)
 option(
     NBODY_ENABLE_COMPUTE_SANITIZER_TESTS
     "Register Compute Sanitizer memcheck tests"
     OFF)
+
+if(NBODY_BUILD_SIMULATION AND NOT NBODY_ENABLE_CUDA)
+    message(
+        FATAL_ERROR
+        "NBODY_BUILD_SIMULATION=ON requires NBODY_ENABLE_CUDA=ON")
+endif()
 
 # The particle loader is header-only. nbody::particle gives consumers a stable,
 # namespaced target and carries the project/Thrust include paths with it.
@@ -206,6 +220,27 @@ if(NBODY_ENABLE_CUDA)
             CUDA_EXTENSIONS OFF
             CUDA_SEPARABLE_COMPILATION ON
             POSITION_INDEPENDENT_CODE ON)
+
+    if(NBODY_BUILD_SIMULATION)
+        add_executable(nbody apps/simulation/main.cpp)
+        # Particles owns Thrust device vectors, so compile the translation unit
+        # with nvcc just like the host-side Simulation orchestration source.
+        set_source_files_properties(
+            apps/simulation/main.cpp
+            PROPERTIES LANGUAGE CUDA)
+        target_link_libraries(nbody PRIVATE nbody::cuda)
+        target_compile_options(
+            nbody
+            PRIVATE
+                $<$<COMPILE_LANGUAGE:CUDA>:--generate-line-info>
+                $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=-Wall,-Wextra,-Wpedantic>)
+        set_target_properties(
+            nbody
+            PROPERTIES
+                CUDA_STANDARD 17
+                CUDA_STANDARD_REQUIRED YES
+                CUDA_EXTENSIONS OFF)
+    endif()
 endif()
 
 # Prefer an already installed GoogleTest package. If none is found, download
