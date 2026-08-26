@@ -136,6 +136,7 @@ if(TARGET nbody::cuda)
         integration/cuda/sparse_octree_test.cu
         integration/cuda/octree_physics_test.cu
         integration/cuda/particle_octree_pipeline_test.cu
+        integration/cuda/simulation_test.cu
         integration/cuda/two_body_orbit_test.cu)
 
     # Opt-in because memcheck is much slower than the normal suite. Configure

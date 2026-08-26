@@ -168,8 +168,16 @@ if(NBODY_ENABLE_CUDA)
         gpu/cuda_kernels/octree_geometry.cu
         gpu/cuda_kernels/octree_physics.cu
         gpu/cuda_kernels/radix_to_octree.cu
-        gpu/cuda_kernels/tree_builder.cu)
+        gpu/cuda_kernels/simulation.cu
+        gpu/cuda_kernels/tree_builder.cu
+        src/simulation.cpp)
     add_library(nbody::cuda ALIAS nbody_cuda)
+
+    # simulation.cpp contains host-side orchestration, but it includes the
+    # CUDA-backed Particles type. Compile this source with the CUDA compiler so
+    # Thrust consistently selects the CUDA device system in every translation
+    # unit that contributes to nbody_cuda.
+    set_source_files_properties(src/simulation.cpp PROPERTIES LANGUAGE CUDA)
 
     # PUBLIC usage requirements are inherited by every target that links
     # nbody::cuda, including the include paths and CUDA runtime dependency.
