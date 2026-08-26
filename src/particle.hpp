@@ -72,6 +72,18 @@ struct DeviceParticlesView {
   double *vz;
 };
 
+struct ConstDeviceParticlesView {
+  std::size_t count;
+
+  const double *mass;
+  const double *x;
+  const double *y;
+  const double *z;
+  const double *vx;
+  const double *vy;
+  const double *vz;
+};
+
 class Particles {
 private:
   // Device Data
@@ -80,11 +92,19 @@ private:
   thrust::device_vector<double> x_, y_, z_;
   thrust::device_vector<double> vx_, vy_, vz_;
 
-  // Pointers to Data on GPU
-  DeviceParticlesView particles_env_{};
-
 public:
-  DeviceParticlesView device_view() {
+  [[nodiscard]] DeviceParticlesView device_view() noexcept {
+    return {num_particles_,
+            thrust::raw_pointer_cast(mass_.data()),
+            thrust::raw_pointer_cast(x_.data()),
+            thrust::raw_pointer_cast(y_.data()),
+            thrust::raw_pointer_cast(z_.data()),
+            thrust::raw_pointer_cast(vx_.data()),
+            thrust::raw_pointer_cast(vy_.data()),
+            thrust::raw_pointer_cast(vz_.data())};
+  }
+
+  [[nodiscard]] ConstDeviceParticlesView device_view() const noexcept {
     return {num_particles_,
             thrust::raw_pointer_cast(mass_.data()),
             thrust::raw_pointer_cast(x_.data()),
@@ -147,9 +167,5 @@ public:
       throw std::runtime_error(
           "Failed to read all expected particle data. File may be truncated.");
     }
-
-    this->particles_env_ = device_view();
   }
-
-  std::size_t size() const { return num_particles_; }
 };

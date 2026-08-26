@@ -9,6 +9,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include <thrust/copy.h>
@@ -75,8 +76,8 @@ void expectDeviceBlockEquals(const std::vector<double> &expected,
   }
 }
 
-void expectViewEquals(const ParticleData &expected,
-                      const DeviceParticlesView &actual) {
+template <typename View>
+void expectViewEquals(const ParticleData &expected, const View &actual) {
   EXPECT_EQ(actual.count, expected.size());
   expectDeviceBlockEquals(expected.mass, actual.mass);
   expectDeviceBlockEquals(expected.x, actual.x);
@@ -151,8 +152,9 @@ TEST_F(ParticleFileTest, LoadsEveryBlockWith32BitHeader) {
 
   Particles particles(input);
 
-  EXPECT_EQ(particles.size(), particleData.size());
-  expectViewEquals(particleData, particles.device_view());
+  const auto view = particles.device_view();
+  EXPECT_EQ(view.count, particleData.size());
+  expectViewEquals(particleData, view);
 }
 
 TEST_F(ParticleFileTest, LoadsEveryBlockWith64BitHeader) {
@@ -161,8 +163,9 @@ TEST_F(ParticleFileTest, LoadsEveryBlockWith64BitHeader) {
 
   Particles particles(input);
 
-  EXPECT_EQ(particles.size(), particleData.size());
-  expectViewEquals(particleData, particles.device_view());
+  const auto view = particles.device_view();
+  EXPECT_EQ(view.count, particleData.size());
+  expectViewEquals(particleData, view);
 }
 
 TEST_F(ParticleFileTest, LoadsRegardlessOfInitialStreamPosition) {
@@ -185,10 +188,22 @@ TEST_F(ParticleFileTest, DeviceViewProvidesWritableParticleStorage) {
 
   thrust::copy_n(&replacement, 1, thrust::device_pointer_cast(view.x));
 
-  const auto updatedX = copyToHost(particles.device_view().x, particles.size());
+  const auto updatedView = particles.device_view();
+  const auto updatedX = copyToHost(updatedView.x, updatedView.count);
   ASSERT_EQ(updatedX.size(), particleData.size());
   EXPECT_DOUBLE_EQ(updatedX.front(), replacement);
   EXPECT_DOUBLE_EQ(updatedX.back(), particleData.x.back());
+}
+
+TEST_F(ParticleFileTest, ConstDeviceViewProvidesReadOnlyParticleStorage) {
+  writePlanarFile(HeaderWidth::Bits32);
+  std::ifstream input(testFile, std::ios::binary);
+  const Particles particles(input);
+
+  const ConstDeviceParticlesView view = particles.device_view();
+  expectViewEquals(particleData, view);
+
+  static_assert(std::is_same_v<decltype(view.x), const double *>);
 }
 
 TEST_F(ParticleFileTest, RejectsUnopenedStream) {
