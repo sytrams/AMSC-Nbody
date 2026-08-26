@@ -201,6 +201,27 @@ Each coordinate and velocity component is written as little-endian ```double```.
 
 Use a writable output path such as ```data/file.bin```. A path like ```/data/file.bin``` points to a root-level directory and will usually fail with a permission error.
 
+## Download Solar-System Data
+
+The script [data/download_solar_system.py](/Users/wedoi/Documents/AMSC-nbody/AMSC-Nbody/data/download_solar_system.py:1) builds two loader-ready datasets at user-selected TDB epochs. It combines barycentric ICRF vectors for the Sun, planet centers, and all planetary moons listed by JPL HORIZONS with the full IAU Minor Planet Center asteroid catalogue.
+
+```bash
+python3 data/download_solar_system.py \
+  --epoch-a 2026-08-26T00:00:00 \
+  --epoch-b 2026-09-25T00:00:00 \
+  --output-dir data/solar_system
+```
+
+The output directory contains:
+
+- `solar_system_epoch_a.bin` and `solar_system_epoch_b.bin`, with identical body ordering and the binary layout described above;
+- `solar_system_objects.csv.gz`, which maps every particle index to its source object and mass model;
+- `solar_system_metadata.json`, which records epochs, units, assumptions, sources, counts, and skipped objects.
+
+Downloads and individual HORIZONS responses are cached under `.cache/solar_system`, so rerunning an interrupted build resumes from the cache. Use `--refresh` to update the source files, `--offline` to require cached data, and `--overwrite` to replace existing outputs. For a quick pipeline check before processing the million-scale catalogue, add `--max-asteroids 1000`.
+
+Major-body positions and velocities are HORIZONS geometric states. MPC asteroids are propagated independently from their heliocentric osculating elements with a two-body Kepler model, rotated from the J2000 ecliptic to ICRF, and translated using the HORIZONS barycentric Sun state. Known JPL `GM` values are converted to mass using the same `G` as the simulator. Most asteroid masses are not measured, so the script estimates them from absolute magnitude using configurable albedo and density assumptions. Moons without a published JPL `GM` are retained as massless test particles. These approximations make the files suitable for cluster-scale application and convergence testing, but the second dataset is not a high-precision HORIZONS reference trajectory for every asteroid.
+
 ## External tool
 We have and external script writing in python to export an image of the plot about our simulation.
 

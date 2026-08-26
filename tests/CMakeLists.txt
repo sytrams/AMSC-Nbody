@@ -39,7 +39,7 @@ gtest_discover_tests(
         LABELS "cpu-unit"
         TIMEOUT 30)
 
-# The data generator depends on NumPy. Register its standard-library unittest
+# The data tools depend on NumPy. Register their standard-library unittests
 # when both Python and that optional runtime dependency are available.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
@@ -54,8 +54,14 @@ if(Python3_Interpreter_FOUND)
             COMMAND
                 ${Python3_EXECUTABLE}
                 "${PROJECT_SOURCE_DIR}/tests/unit/python/generate_galaxy_test.py")
+        add_test(
+            NAME "cpu.DownloadSolarSystemTest"
+            COMMAND
+                ${Python3_EXECUTABLE}
+                "${PROJECT_SOURCE_DIR}/tests/unit/python/download_solar_system_test.py")
         set_tests_properties(
             "cpu.GenerateGalaxyTest"
+            "cpu.DownloadSolarSystemTest"
             PROPERTIES
                 LABELS "cpu-unit"
                 TIMEOUT 30)
