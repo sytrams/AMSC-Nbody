@@ -157,10 +157,12 @@ python3 data/generate_galaxy.py --galaxy spiral -n 100000 -o data/milky_way_like
 ```
 
 Available options:
-- ```--galaxy globular|spiral``` selects the base galaxy type.
+- ```--galaxy globular|spiral|two-body``` selects the initial-condition type.
 - ```--shape natural|heart|smile``` changes the projected XY shape. The default is ```natural```.
 - ```--num-arms N``` sets the number of spiral arms when ```--galaxy spiral``` is used. The default is ```4```.
 - ```-n``` or ```--num-particles``` sets the particle count.
+- ```--mass VALUE``` sets the mass of each particle. The two-body default is ```1e10``` kg.
+- ```--separation VALUE``` sets the distance between the bodies when ```--galaxy two-body``` is used.
 - ```-o``` or ```--output``` sets the output binary file path.
 - ```--seed``` makes the generated dataset reproducible.
 
@@ -169,6 +171,20 @@ Examples:
 python3 data/generate_galaxy.py --galaxy spiral --num-arms 3 -n 5000000 -o data/milky_way_like_5M.bin
 python3 data/generate_galaxy.py --galaxy globular --shape heart -n 100000 -o data/globular_heart.bin
 python3 data/generate_galaxy.py --galaxy spiral --shape smile -n 100000 -o data/spiral_smile.bin
+python3 data/generate_galaxy.py --galaxy two-body -o data/two_body.bin
+```
+
+The two-body mode generates two equal masses in a circular orbit around their
+shared center of mass. It prints the orbital period and a suggested timestep
+for 128 steps per orbit. Run the resulting file with, for example:
+
+```bash
+./build/simulation/nbody \
+  --input data/two_body.bin \
+  --time-step <suggested-timestep> \
+  --steps 128 \
+  --theta 0.5 \
+  --softening 0
 ```
 
 Binary format:

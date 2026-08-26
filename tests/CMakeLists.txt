@@ -39,6 +39,33 @@ gtest_discover_tests(
         LABELS "cpu-unit"
         TIMEOUT 30)
 
+# The data generator depends on NumPy. Register its standard-library unittest
+# when both Python and that optional runtime dependency are available.
+find_package(Python3 COMPONENTS Interpreter QUIET)
+if(Python3_Interpreter_FOUND)
+    execute_process(
+        COMMAND ${Python3_EXECUTABLE} -c "import numpy"
+        RESULT_VARIABLE nbody_numpy_import_status
+        OUTPUT_QUIET
+        ERROR_QUIET)
+    if(nbody_numpy_import_status EQUAL 0)
+        add_test(
+            NAME "cpu.GenerateGalaxyTest"
+            COMMAND
+                ${Python3_EXECUTABLE}
+                "${PROJECT_SOURCE_DIR}/tests/unit/python/generate_galaxy_test.py")
+        set_tests_properties(
+            "cpu.GenerateGalaxyTest"
+            PROPERTIES
+                LABELS "cpu-unit"
+                TIMEOUT 30)
+    else()
+        message(
+            STATUS
+            "NumPy is unavailable; the generate_galaxy.py test is not registered")
+    endif()
+endif()
+
 # The CUDA section is skipped cleanly when NBODY_ENABLE_CUDA=OFF. Checking the
 # target is more robust than repeating the option because it verifies that the
 # library was actually created.
