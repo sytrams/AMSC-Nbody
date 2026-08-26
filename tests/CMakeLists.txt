@@ -121,6 +121,7 @@ if(TARGET nbody::cuda)
         unit
         unit/cuda/barnes_hut_test.cu
         unit/cuda/globalbounding_test.cu
+        unit/cuda/integrator_test.cu
         unit/cuda/morton_test.cu
         unit/cuda/morton_leaf_groups_test.cu
         unit/cuda/octree_geometry_test.cu
@@ -134,7 +135,8 @@ if(TARGET nbody::cuda)
         integration/cuda/radix_to_octree_test.cu
         integration/cuda/sparse_octree_test.cu
         integration/cuda/octree_physics_test.cu
-        integration/cuda/particle_octree_pipeline_test.cu)
+        integration/cuda/particle_octree_pipeline_test.cu
+        integration/cuda/two_body_orbit_test.cu)
 
     # Opt-in because memcheck is much slower than the normal suite. Configure
     # with -DNBODY_ENABLE_COMPUTE_SANITIZER_TESTS=ON, build, then run:

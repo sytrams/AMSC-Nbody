@@ -161,6 +161,7 @@ if(NBODY_ENABLE_CUDA)
         STATIC
         gpu/cuda_kernels/barnes_hut.cu
         gpu/cuda_kernels/globalbounding.cu
+        gpu/cuda_kernels/integrator.cu
         gpu/cuda_kernels/morton.cu
         gpu/cuda_kernels/morton_leaf_groups.cu
         gpu/cuda_kernels/octree_builder.cu
