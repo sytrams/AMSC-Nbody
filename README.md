@@ -164,6 +164,26 @@ possible with `--stream-bind 0.0.0.0`, but it should be used only behind a
 cluster firewall because this initial transport intentionally relies on SSH
 for authentication and encryption.
 
+The equivalent convenience wrappers configure and build their application if
+needed, then launch it with the defaults above:
+
+```bash
+# On the cluster: serve the current job's persistent spool.
+./scripts/run-stream-server.sh
+
+# On the local computer: follow frames through the SSH tunnel.
+./scripts/run-stream-client.sh
+
+# Download the current backlog and exit.
+./scripts/run-stream-client.sh --once
+```
+
+Useful overrides include `NBODY_STREAM_HOST`, `NBODY_STREAM_PORT`,
+`NBODY_STREAM_SPOOL_DIR`, `NBODY_FRAME_OUTPUT_DIR`, and `NBODY_SKIP_BUILD=1`.
+The client defaults to `received-frames` in the project directory; the server
+defaults to `$SCRATCH/nbody-frames-$SLURM_JOB_ID` when those cluster variables
+are available.
+
 Each `.nbsnap` file is little-endian and contains a 72-byte header followed by
 interleaved float32 `x, y, z` values. The header contains the `NBSNAP01` magic,
 format version, sequence number, simulation step, simulated time, particle
