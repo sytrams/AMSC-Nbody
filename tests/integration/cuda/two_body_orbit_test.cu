@@ -85,23 +85,18 @@ void computeAcceleration(
     const std::size_t particleCount =
         mass.size();
 
-    //
-    // Bounding cube for the current particle configuration.
-    //
     Bbox boundingBox(
         devicePointer(x),
         devicePointer(y),
         devicePointer(z),
         particleCount);
 
-    //
-    // Morton keys + sorted original-particle indices.
-    //
     MortonKeys morton(
         devicePointer(x),
         devicePointer(y),
         devicePointer(z),
-        particleCount);
+        particleCount,
+        boundingBox);
 
     PipelineResources resources;
 

@@ -468,7 +468,8 @@ protected:
                 dY.data()),
             thrust::raw_pointer_cast(
                 dZ.data()),
-            particleCount);
+            particleCount,
+            boundingBox);
 
         SpatialResources resources;
 

@@ -9,12 +9,16 @@ using MortonKey = std::uint32_t;
 using QuantisedCoordinate = std::uint32_t;
 using ParticleIndex = std::uint32_t;
 
+class Bbox;
+
 class MortonKeys {
 private:
     static constexpr std::size_t dimensions = 3;
 
     thrust::device_vector<MortonKey> keys_;
     thrust::device_vector<ParticleIndex> indices_;
+
+    void build(const double* x, const double* y, const double* z, std::size_t count, const Bbox& boundingBox);
 
     void normalise(const double* x, const double* y, const double* z,
                    const double* centre_x, const double* centre_y,
@@ -34,8 +38,8 @@ private:
 public:
     // Coordinate pointers must each reference at least count doubles in device
     // memory. Keys and particle indices are stored in ascending Morton order.
-    MortonKeys(const double* x, const double* y, const double* z,
-               std::size_t count);
+    MortonKeys(const double* x, const double* y, const double* z, std::size_t count);
+    MortonKeys(const double* x, const double* y, const double* z, std::size_t count, const Bbox& boundingBox);
 
     [[nodiscard]] const MortonKey *keys_device_data() const noexcept;
     [[nodiscard]] MortonKey *keys_device_data() noexcept;
