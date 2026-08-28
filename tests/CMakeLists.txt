@@ -169,37 +169,18 @@ if(TARGET nbody::cuda)
         integration/cuda/octree_physics_test.cu
         integration/cuda/particle_octree_pipeline_test.cu
         integration/cuda/simulation_test.cu
-        integration/cuda/two_body_orbit_test.cu)
+        integration/cuda/two_body_orbit_test.cu
+        integration/cuda/solar_system_ephemeris_test.cu
+        support/solar_system_reference_fixture.cpp)
 
-    # Rebuild two small, pinned HORIZONS datasets through the production
-    # Python data tool, advance epoch A with the production Simulation class,
-    # and compare all final position/velocity vectors with epoch B. Add this
-    # case to the existing integration executable so the normal integration
-    # build target also compiles and exposes it to CTest.
-    if(Python3_Interpreter_FOUND AND nbody_numpy_import_status EQUAL 0)
-        list(
-            APPEND nbody_cuda_integration_sources
-            integration/cuda/solar_system_ephemeris_test.cu)
-    endif()
+    # The solar-system fixture writer is C++ and emits two compact datasets at
+    # test runtime, so this integration target has no Python or NumPy runtime
+    # dependency on the cluster.
 
     add_nbody_cuda_test_target(
         nbody_cuda_integration_tests
         integration
         ${nbody_cuda_integration_sources})
-
-    if(Python3_Interpreter_FOUND AND nbody_numpy_import_status EQUAL 0)
-        target_compile_definitions(
-            nbody_cuda_integration_tests
-            PRIVATE
-                NBODY_TEST_PYTHON_EXECUTABLE="${Python3_EXECUTABLE}"
-                NBODY_TEST_DATASET_GENERATOR="${PROJECT_SOURCE_DIR}/data/download_solar_system.py"
-                NBODY_TEST_EPHEMERIS_FIXTURE="${PROJECT_SOURCE_DIR}/tests/data/solar_system_ephemeris.json"
-                NBODY_TEST_EPHEMERIS_PREPARER="${PROJECT_SOURCE_DIR}/tests/scripts/prepare_solar_system_reference.py")
-    else()
-        message(
-            STATUS
-            "Python with NumPy is unavailable; the solar-system ephemeris integration test is not registered")
-    endif()
 
     # Exercise the production executable as a separate process. The small
     # helper writes a deterministic binary input without relying on Python or

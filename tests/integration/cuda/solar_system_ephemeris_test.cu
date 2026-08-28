@@ -5,7 +5,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <limits>
@@ -17,22 +16,7 @@
 
 #include "cuda_test.hpp"
 #include "simulation.hpp"
-
-#ifndef NBODY_TEST_PYTHON_EXECUTABLE
-#error "NBODY_TEST_PYTHON_EXECUTABLE must name the Python used by the test"
-#endif
-
-#ifndef NBODY_TEST_DATASET_GENERATOR
-#error "NBODY_TEST_DATASET_GENERATOR must name download_solar_system.py"
-#endif
-
-#ifndef NBODY_TEST_EPHEMERIS_FIXTURE
-#error "NBODY_TEST_EPHEMERIS_FIXTURE must name the pinned HORIZONS fixture"
-#endif
-
-#ifndef NBODY_TEST_EPHEMERIS_PREPARER
-#error "NBODY_TEST_EPHEMERIS_PREPARER must name the fixture preparation script"
-#endif
+#include "solar_system_reference_fixture.hpp"
 
 namespace {
 
@@ -75,34 +59,6 @@ public:
 private:
   std::filesystem::path path_;
 };
-
-std::string shellQuote(const std::string &value) {
-  std::string quoted{"'"};
-  for (const char character : value) {
-    if (character == '\'')
-      quoted += "'\\''";
-    else
-      quoted += character;
-  }
-  quoted += '\'';
-  return quoted;
-}
-
-void prepareDatasets(const std::filesystem::path &outputDirectory) {
-  const std::string command =
-      shellQuote(NBODY_TEST_PYTHON_EXECUTABLE) + " " +
-      shellQuote(NBODY_TEST_EPHEMERIS_PREPARER) + " --generator " +
-      shellQuote(NBODY_TEST_DATASET_GENERATOR) + " --fixture " +
-      shellQuote(NBODY_TEST_EPHEMERIS_FIXTURE) + " --output-dir " +
-      shellQuote(outputDirectory.string());
-
-  const int status = std::system(command.c_str());
-  if (status != 0) {
-    throw std::runtime_error("Solar-system dataset preparation failed with "
-                             "status " +
-                             std::to_string(status));
-  }
-}
 
 void readBlock(std::ifstream &input, std::vector<double> &values,
                const char *name) {
@@ -200,23 +156,17 @@ TEST_F(SolarSystemEphemerisTest, MatchesHorizonsReferenceAfterOneDay) {
       1.0e-3, 5.0e-3, 5.0e-3, 3.25, 1.0e-3, 2.1, 0.6, 0.3, 1.15, 27.0};
 
   const TemporaryDirectory temporaryDirectory;
-  ASSERT_NO_THROW(prepareDatasets(temporaryDirectory.path()));
+  const SolarSystemReferenceDatasets datasets =
+      writeSolarSystemReferenceDatasets(temporaryDirectory.path());
 
-  const std::filesystem::path datasetDirectory =
-      temporaryDirectory.path() / "datasets";
-  const std::filesystem::path initialPath =
-      datasetDirectory / "ephemeris_reference_epoch_a.bin";
-  const std::filesystem::path referencePath =
-      datasetDirectory / "ephemeris_reference_epoch_b.bin";
-
-  const HostParticles initial = loadHostParticles(initialPath);
-  const HostParticles reference = loadHostParticles(referencePath);
+  const HostParticles initial = loadHostParticles(datasets.epochA);
+  const HostParticles reference = loadHostParticles(datasets.epochB);
   ASSERT_EQ(initial.size(), bodyNames.size());
   ASSERT_EQ(reference.size(), bodyNames.size());
   for (std::size_t index = 0; index < bodyNames.size(); ++index)
     EXPECT_DOUBLE_EQ(initial.mass[index], reference.mass[index]);
 
-  std::ifstream input(initialPath, std::ios::binary);
+  std::ifstream input(datasets.epochA, std::ios::binary);
   ASSERT_TRUE(input.is_open());
   Particles particles(input);
   Simulation simulation(std::move(particles), {timeStep, 0.0, 0.0});
