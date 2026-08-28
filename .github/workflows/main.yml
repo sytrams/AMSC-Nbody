@@ -4,6 +4,7 @@ on:
   push:
     branches:
       - main
+      - codex/vpn-reconnect-resilience
 
 jobs:
   connect:
@@ -128,6 +129,7 @@ jobs:
           final_failed="$VPN_FAILED_FILE"
           diagnostics_root="$VPN_DIAGNOSTICS_DIR"
           child_pid=""
+          shutdown_requested=false
 
           cleanup_child() {
             if [[ -n "$child_pid" ]] && kill -0 "$child_pid" 2>/dev/null; then
@@ -138,7 +140,13 @@ jobs:
             rm -f "$final_ready"
           }
 
-          trap cleanup_child INT TERM EXIT
+          request_shutdown() {
+            shutdown_requested=true
+            cleanup_child
+          }
+
+          trap request_shutdown INT TERM
+          trap cleanup_child EXIT
 
           publish_diagnostics() {
             local attempt_dir="$1"
@@ -163,26 +171,49 @@ jobs:
             local message="$1"
 
             grep -Eqi \
-              'gpclient (output ended|exited) before VPN readiness|VPN readiness was not detected|Connection timed out|tcp connect error|Network error|error sending request|Connection reset|temporarily unavailable|Could not load the (portal|gateway) authentication page|Timed out after .* waiting for (portal|gateway) authentication' \
+              'gpclient (output ended|exited) before VPN readiness|VPN readiness was not detected|Connection timed out|tcp connect error|Network error|error sending request|Connection reset|temporarily unavailable|OpenConnect exited|Invalid authentication cookie|Could not load the (portal|gateway) authentication page|Timed out after .* waiting for (portal|gateway) authentication' \
               <<<"$message"
           }
 
           rm -f "$final_ready" "$final_failed"
           mkdir -p "$diagnostics_root"
 
-          delays=(35 70)
-          max_attempts=3
+          # Startup failures are common when the VPN endpoint is temporarily
+          # unreachable. Five attempts span roughly eight minutes when the
+          # observed 30-second TCP timeouts are included.
+          startup_delays=(20 40 80 120)
+          startup_max_attempts=5
 
-          for ((attempt=1; attempt<=max_attempts; ++attempt)); do
+          # Once a tunnel has worked, keep trying to restore it until this
+          # background step is cancelled. The job timeout remains the outer
+          # bound, while capped backoff avoids hammering the VPN endpoint.
+          reconnect_delays=(10 20 40 60 90)
+
+          attempt=0
+          startup_failures=0
+          reconnect_failures=0
+          ever_connected=false
+
+          while true; do
+            [[ "$shutdown_requested" == true ]] && exit 0
+
+            ((attempt += 1))
             attempt_ready="$RUNNER_TEMP/vpn-ready-attempt-$attempt"
             attempt_failed="$RUNNER_TEMP/vpn-failed-attempt-$attempt"
             attempt_dir="$diagnostics_root/attempt-$attempt"
+            connected_this_attempt=false
 
             rm -f "$attempt_ready" "$attempt_failed"
             rm -rf "$attempt_dir"
             mkdir -p "$attempt_dir"
 
-            echo "[vpn-wrapper] starting attempt $attempt/$max_attempts"
+            if [[ "$ever_connected" == true ]]; then
+              echo "[vpn-wrapper] starting reconnect attempt $attempt"
+            else
+              echo \
+                "[vpn-wrapper] starting startup attempt " \
+                "$((startup_failures + 1))/$startup_max_attempts"
+            fi
 
             VPN_READY_FILE="$attempt_ready" \
             VPN_FAILED_FILE="$attempt_failed" \
@@ -195,19 +226,15 @@ jobs:
               if [[ -f "$attempt_ready" ]]; then
                 publish_diagnostics "$attempt_dir"
 
-                printf 'ready\n' > "$final_ready"
+                ready_tmp="$final_ready.$$.tmp"
+                printf 'ready\n' > "$ready_tmp"
+                mv "$ready_tmp" "$final_ready"
 
                 echo "[vpn-wrapper] VPN connected on attempt $attempt"
-
-                set +e
-                wait "$child_pid"
-                status=$?
-                set -e
-
-                child_pid=""
-                rm -f "$final_ready"
-
-                exit "$status"
+                connected_this_attempt=true
+                ever_connected=true
+                reconnect_failures=0
+                break
               fi
 
               sleep 1
@@ -219,6 +246,9 @@ jobs:
             set -e
 
             child_pid=""
+            rm -f "$final_ready"
+
+            [[ "$shutdown_requested" == true ]] && exit 0
 
             failure="vpn_remote_auth.py exited with status $status"
 
@@ -232,15 +262,52 @@ jobs:
               status=1
             fi
 
-            if (( attempt == max_attempts )) || ! retryable_failure "$failure"; then
+            if [[ "$connected_this_attempt" == true ]]; then
+              # A completed browser authentication proves the credentials are
+              # usable. Treat any later tunnel loss as recoverable, including
+              # the observed OpenConnect "Invalid authentication cookie" exit.
+              ((reconnect_failures += 1))
+              delay="${reconnect_delays[0]}"
+              echo \
+                "[vpn-wrapper] established VPN connection dropped; " \
+                "reconnecting in ${delay}s" >&2
+              sleep "$delay"
+              continue
+            fi
+
+            if ! retryable_failure "$failure"; then
               printf '%s\n' "$failure" > "$final_failed"
               echo "$failure" >&2
               exit "$status"
             fi
 
-            delay="${delays[$((attempt - 1))]}"
+            if [[ "$ever_connected" == true ]]; then
+              ((reconnect_failures += 1))
+              delay_index=$((reconnect_failures - 1))
+              if (( delay_index >= ${#reconnect_delays[@]} )); then
+                delay_index=$((${#reconnect_delays[@]} - 1))
+              fi
+              delay="${reconnect_delays[$delay_index]}"
 
-            echo "[vpn-wrapper] transient VPN failure; retrying in ${delay}s"
+              echo \
+                "[vpn-wrapper] reconnect failed transiently; " \
+                "retrying in ${delay}s" >&2
+              sleep "$delay"
+              continue
+            fi
+
+            ((startup_failures += 1))
+            if (( startup_failures >= startup_max_attempts )); then
+              printf '%s\n' "$failure" > "$final_failed"
+              echo "$failure" >&2
+              exit "$status"
+            fi
+
+            delay="${startup_delays[$((startup_failures - 1))]}"
+
+            echo \
+              "[vpn-wrapper] transient VPN startup failure; " \
+              "retrying in ${delay}s" >&2
             sleep "$delay"
           done
 
@@ -266,17 +333,56 @@ jobs:
 
       - name: Verify SSH over VPN
         id: ssh
-        timeout-minutes: 1
+        timeout-minutes: 12
+        shell: bash
         run: |
-          ssh -T -i ~/.ssh/cineca \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o NumberOfPasswordPrompts=0 \
-            -o ConnectTimeout=15 \
-            -o ConnectionAttempts=1 \
-            "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}" \
-            true
+          set -euo pipefail
+
+          wait_for_vpn() {
+            for _ in {1..600}; do
+              [[ -f "$RUNNER_TEMP/vpn-ready" ]] && return 0
+
+              if [[ -s "$RUNNER_TEMP/vpn-failed" ]]; then
+                cat "$RUNNER_TEMP/vpn-failed" >&2
+                return 1
+              fi
+
+              sleep 1
+            done
+
+            echo "Timed out waiting for the VPN to reconnect" >&2
+            return 1
+          }
+
+          for attempt in {1..6}; do
+            wait_for_vpn
+
+            set +e
+            ssh -T -i ~/.ssh/cineca \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o NumberOfPasswordPrompts=0 \
+              -o ConnectTimeout=15 \
+              -o ConnectionAttempts=1 \
+              -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=3 \
+              "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}" \
+              true
+            status=$?
+            set -e
+
+            (( status == 0 )) && exit 0
+            (( status != 255 )) && exit "$status"
+
+            echo \
+              "SSH connectivity attempt $attempt/6 was interrupted; " \
+              "waiting for the VPN" >&2
+            sleep 5
+          done
+
+          echo "SSH remained unavailable after VPN recovery attempts" >&2
+          exit 1
 
       - name: Run tests on a PBS GPU node
         id: tests
@@ -286,6 +392,22 @@ jobs:
           RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
+
+          wait_for_vpn() {
+            for _ in {1..600}; do
+              [[ -f "$RUNNER_TEMP/vpn-ready" ]] && return 0
+
+              if [[ -s "$RUNNER_TEMP/vpn-failed" ]]; then
+                cat "$RUNNER_TEMP/vpn-failed" >&2
+                return 1
+              fi
+
+              sleep 1
+            done
+
+            echo "Timed out waiting for the VPN to reconnect" >&2
+            return 1
+          }
 
           target="${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}"
           ssh_options=(
@@ -297,25 +419,35 @@ jobs:
             -o NumberOfPasswordPrompts=0
             -o ConnectTimeout=30
             -o ConnectionAttempts=2
+            -o ServerAliveInterval=15
+            -o ServerAliveCountMax=3
           )
           printf -v remote_arguments '%q ' "$RUN_KEY"
 
           results_path="$RUNNER_TEMP/cluster-test-results"
           mkdir -p "$results_path"
+          orchestration_log="$results_path/orchestration.log"
+          : > "$orchestration_log"
 
-          set +e
-          {
-          ssh "${ssh_options[@]}" "$target" \
-            "bash -l -s -- $remote_arguments" <<'REMOTE_SCRIPT'
+          for orchestration_attempt in {1..8}; do
+            wait_for_vpn
+
+            echo \
+              "[orchestration] SSH attempt $orchestration_attempt/8" \
+              | tee -a "$orchestration_log"
+
+            set +e
+            {
+            ssh "${ssh_options[@]}" "$target" \
+              "bash -l -s -- $remote_arguments" <<'REMOTE_SCRIPT'
           set -euo pipefail
 
           run_key="$1"
           repository="$HOME/AMSC-Nbody-fresh"
           results_dir="$repository/.ci-results/$run_key"
+          dispatch_file="$results_dir/pbs-dispatch.txt"
+          submission_lock="$results_dir/pbs-submission.lock"
           mkdir -p "$results_dir"
-
-          cd "$repository"
-          git pull --ff-only
 
           if [[ -r /etc/profile.d/pbs.sh ]]; then
             set +u
@@ -332,16 +464,39 @@ jobs:
             printf 'Using %s: %s\n' "$required_command" "$command_path"
           done
 
-          job_environment="NBODY_REPOSITORY=$repository"
-          job_environment+=",NBODY_RESULTS_DIR=$results_dir"
-          job_id="$(
-            qsub \
-              -q gpu \
-              -l walltime=00:30:00 \
-              -N amsc-nbody-tests \
-              -j oe \
-              -o "$results_dir/pbs-job.out" \
-              -v "$job_environment" <<'PBS_SCRIPT'
+          read_job_id() {
+            [[ -s "$dispatch_file" ]] || return 0
+            sed -n 's/^job_id=//p' "$dispatch_file" \
+              | head -n 1
+          }
+
+          job_id="$(read_job_id)"
+
+          if [[ -z "$job_id" ]]; then
+            if mkdir "$submission_lock" 2>/dev/null; then
+              cleanup_submission_lock() {
+                rmdir "$submission_lock" 2>/dev/null || true
+              }
+              trap cleanup_submission_lock EXIT
+
+              # Recheck after acquiring the lock in case another SSH session
+              # published the dispatch marker while this one was waiting.
+              job_id="$(read_job_id)"
+
+              if [[ -z "$job_id" ]]; then
+                cd "$repository"
+                git pull --ff-only
+
+                job_environment="NBODY_REPOSITORY=$repository"
+                job_environment+=",NBODY_RESULTS_DIR=$results_dir"
+                job_id="$(
+                  qsub \
+                    -q gpu \
+                    -l walltime=00:30:00 \
+                    -N amsc-nbody-tests \
+                    -j oe \
+                    -o "$results_dir/pbs-job.out" \
+                    -v "$job_environment" <<'PBS_SCRIPT'
           #!/usr/bin/env bash
           set -Eeuo pipefail
 
@@ -449,10 +604,38 @@ jobs:
           mark_stage "completed all tests"
           CONTAINER_SCRIPT
           PBS_SCRIPT
-          )"
+                )"
 
-          printf 'Submitted PBS job %s\n' "$job_id"
-          printf 'job_id=%s\n' "$job_id" > "$results_dir/pbs-dispatch.txt"
+                dispatch_tmp="$dispatch_file.$$.tmp"
+                printf 'job_id=%s\n' "$job_id" > "$dispatch_tmp"
+                mv "$dispatch_tmp" "$dispatch_file"
+                printf 'Submitted PBS job %s\n' "$job_id"
+              fi
+
+              cleanup_submission_lock
+              trap - EXIT
+            else
+              # A previous SSH session may still be finishing qsub. Wait for
+              # its atomic marker rather than risking a duplicate GPU job.
+              for _ in {1..60}; do
+                [[ -s "$dispatch_file" ]] && break
+                sleep 1
+              done
+              job_id="$(read_job_id)"
+
+              if [[ -z "$job_id" ]]; then
+                echo "PBS submission is still owned by another SSH session" >&2
+                exit 75
+              fi
+            fi
+          else
+            printf 'Resuming PBS job %s after SSH reconnect\n' "$job_id"
+          fi
+
+          if [[ ! "$job_id" =~ ^[[:alnum:]_.-]+$ ]]; then
+            echo "Invalid PBS job identifier: $job_id" >&2
+            exit 1
+          fi
 
           job_finished=false
           missing_state_polls=0
@@ -537,54 +720,101 @@ jobs:
           printf 'NBODY_CI_TEST_EXIT_CODE=%s\n' "$test_exit_code"
           exit "$test_exit_code"
           REMOTE_SCRIPT
-          } 2>&1 | tee "$results_path/orchestration.log"
-          ssh_status=${PIPESTATUS[0]}
+            } 2>&1 | tee -a "$orchestration_log"
+            ssh_status=${PIPESTATUS[0]}
+            set -e
 
-          reported_test_status="$(
-            sed -n \
-              's/^NBODY_CI_TEST_EXIT_CODE=\([0-9][0-9]*\)$/\1/p' \
-              "$results_path/orchestration.log" \
-              | tail -n 1
-          )"
+            reported_test_status="$(
+              sed -n \
+                's/^NBODY_CI_TEST_EXIT_CODE=\([0-9][0-9]*\)$/\1/p' \
+                "$orchestration_log" \
+                | tail -n 1
+            )"
 
-          if [[ "$reported_test_status" =~ ^[0-9]+$ ]]; then
-            test_status="$reported_test_status"
-            if (( ssh_status != test_status )); then
-              printf \
-                'SSH returned %s after the remote job reported test status %s; using the explicit test status.\n' \
-                "$ssh_status" "$test_status" >&2
+            if [[ "$reported_test_status" =~ ^[0-9]+$ ]]; then
+              if (( ssh_status != reported_test_status )); then
+                printf \
+                  'SSH returned %s after the remote job reported test status %s; using the explicit test status.\n' \
+                  "$ssh_status" "$reported_test_status" >&2
+              fi
+              exit "$reported_test_status"
             fi
-          else
-            echo "Remote test status marker was not received" >&2
-            test_status="$ssh_status"
-          fi
 
-          set -e
-          exit "$test_status"
+            if (( ssh_status != 255 && ssh_status != 75 )); then
+              echo "Remote orchestration failed with status $ssh_status" >&2
+              exit "$ssh_status"
+            fi
+
+            echo \
+              "[orchestration] SSH was interrupted before the remote test " \
+              "status arrived; waiting for VPN recovery" \
+              | tee -a "$orchestration_log" >&2
+            sleep 5
+          done
+
+          echo "Remote test status was not received after 8 SSH attempts" >&2
+          exit 1
 
       - name: Download test results
         id: collect_tests
         if: ${{ always() && steps.tests.outcome != 'skipped' }}
-        timeout-minutes: 10
+        timeout-minutes: 12
         shell: bash
         env:
           RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
         run: |
           set -euo pipefail
 
+          wait_for_vpn() {
+            for _ in {1..600}; do
+              [[ -f "$RUNNER_TEMP/vpn-ready" ]] && return 0
+
+              if [[ -s "$RUNNER_TEMP/vpn-failed" ]]; then
+                cat "$RUNNER_TEMP/vpn-failed" >&2
+                return 1
+              fi
+
+              sleep 1
+            done
+
+            echo "Timed out waiting for the VPN to reconnect" >&2
+            return 1
+          }
+
           results_path="$RUNNER_TEMP/cluster-test-results"
           mkdir -p "$results_path"
-          scp \
-            -r \
-            -i ~/.ssh/cineca \
-            -o BatchMode=yes \
-            -o IdentitiesOnly=yes \
-            -o StrictHostKeyChecking=yes \
-            -o NumberOfPasswordPrompts=0 \
-            -o ConnectTimeout=30 \
-            -o ConnectionAttempts=2 \
-            "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}:AMSC-Nbody-fresh/.ci-results/$RUN_KEY/." \
-            "$results_path/"
+
+          for attempt in {1..6}; do
+            wait_for_vpn
+
+            set +e
+            scp \
+              -r \
+              -i ~/.ssh/cineca \
+              -o BatchMode=yes \
+              -o IdentitiesOnly=yes \
+              -o StrictHostKeyChecking=yes \
+              -o NumberOfPasswordPrompts=0 \
+              -o ConnectTimeout=30 \
+              -o ConnectionAttempts=2 \
+              -o ServerAliveInterval=15 \
+              -o ServerAliveCountMax=3 \
+              "${{ secrets.SSH_USER }}@${{ secrets.CLUSTER_IP_ADDRESS }}:AMSC-Nbody-fresh/.ci-results/$RUN_KEY/." \
+              "$results_path/"
+            status=$?
+            set -e
+
+            (( status == 0 )) && exit 0
+            (( status != 255 )) && exit "$status"
+
+            echo \
+              "SCP attempt $attempt/6 was interrupted; waiting for the VPN" \
+              >&2
+            sleep 5
+          done
+
+          echo "Could not collect results after VPN recovery attempts" >&2
+          exit 1
 
       - name: Stop VPN
         cancel: vpn
