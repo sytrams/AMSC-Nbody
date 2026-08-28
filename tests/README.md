@@ -11,7 +11,8 @@ There are no manual `[PASS]`/`[FAIL]` test runners.
 - `integration/cuda`: GoogleTest cases spanning multiple CUDA tree stages.
 - `integration/metal`: reserved for future headless Metal GoogleTest coverage.
 - `support`: fixtures and helpers shared by test sources.
-- `data`: small deterministic test fixtures only.
+- `data`: small deterministic test fixtures only, including pinned JPL
+  HORIZONS states used to rebuild the two solar-system datasets offline.
 - `scripts`: diagnostic tools such as Compute Sanitizer runners.
 
 Test suite names identify the component under test, and test names describe
@@ -21,3 +22,9 @@ CUDA tests derive from `CudaTest`. If no usable CUDA device is available,
 GoogleTest reports the corresponding cases as skipped.
 
 Randomized tests always use fixed seeds so failures are reproducible.
+
+`SolarSystemEphemerisTest` runs the production Python dataset builder to create
+an epoch-A initial state and an epoch-B reference state for the Sun and planet
+centers. It then advances the CUDA simulation for the one-day interval and
+compares every body's 3D position and velocity with the pinned HORIZONS
+reference. The source fixture is local, so the test never needs network access.

@@ -128,6 +128,7 @@ Useful filters include:
 ctest --test-dir build/cuda-tests -L unit --output-on-failure
 ctest --test-dir build/cuda-tests -L integration --output-on-failure
 ctest --test-dir build/cuda-tests -R TreeBuilder --output-on-failure
+ctest --test-dir build/cuda-tests -R SolarSystemEphemerisTest --output-on-failure
 ```
 
 Compute Sanitizer is intentionally separate from the fast test run:
@@ -221,6 +222,13 @@ The output directory contains:
 Downloads and individual HORIZONS responses are cached under `.cache/solar_system`, so rerunning an interrupted build resumes from the cache. Use `--refresh` to update the source files, `--offline` to require cached data, and `--overwrite` to replace existing outputs. For a quick pipeline check before processing the million-scale catalogue, add `--max-asteroids 1000`.
 
 Major-body positions and velocities are HORIZONS geometric states. MPC asteroids are propagated independently from their heliocentric osculating elements with a two-body Kepler model, rotated from the J2000 ecliptic to ICRF, and translated using the HORIZONS barycentric Sun state. Known JPL `GM` values are converted to mass using the same `G` as the simulator. Most asteroid masses are not measured, so the script estimates them from absolute magnitude using configurable albedo and density assumptions. Moons without a published JPL `GM` are retained as massless test particles. These approximations make the files suitable for cluster-scale application and convergence testing, but the second dataset is not a high-precision HORIZONS reference trajectory for every asteroid.
+
+The CUDA integration suite contains `SolarSystemEphemerisTest`, which invokes
+this script offline to rebuild two pinned Sun-and-planets datasets for
+2026-08-26 and 2026-08-27 TDB. Epoch A initializes the production simulation;
+after one simulated day, all resulting 3D positions and velocities are checked
+against epoch B. Per-body tolerances account for the moons deliberately omitted
+from this compact test fixture.
 
 ## External tool
 We have and external script writing in python to export an image of the plot about our simulation.
