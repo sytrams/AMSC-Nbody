@@ -172,7 +172,7 @@ __global__ void propagateOctreeMassKernel(Octree octree, int* errorCode)
     if (leaf >= octree.nNodes)
         return;
 
-    //Only occupied level-10 cells start a bottom-up propagation.
+    //Only occupied octree leaves start a bottom-up propagation.
     if (octree.particleCount[leaf] <= 0)
         return;
 
