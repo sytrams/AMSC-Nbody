@@ -10,9 +10,10 @@ There are no manual `[PASS]`/`[FAIL]` test runners.
 - `unit/cuda`: focused GoogleTest cases for individual CUDA components.
 - `integration/cuda`: GoogleTest cases spanning multiple CUDA tree stages.
 - `integration/metal`: reserved for future headless Metal GoogleTest coverage.
-- `support`: fixtures and helpers shared by test sources.
-- `data`: small deterministic test fixtures only, including pinned JPL
-  HORIZONS states used to rebuild the two solar-system datasets offline.
+- `support`: fixtures and helpers shared by test sources, including the C++
+  writer for the compact solar-system reference datasets.
+- `data`: small deterministic test fixtures only; large generated datasets are
+  never checked into the repository.
 - `scripts`: diagnostic tools such as Compute Sanitizer runners.
 
 Test suite names identify the component under test, and test names describe
@@ -23,8 +24,9 @@ GoogleTest reports the corresponding cases as skipped.
 
 Randomized tests always use fixed seeds so failures are reproducible.
 
-`SolarSystemEphemerisTest` runs the production Python dataset builder to create
-an epoch-A initial state and an epoch-B reference state for the Sun and planet
+`SolarSystemEphemerisTest` calls a compiled C++ fixture writer to create an
+epoch-A initial state and an epoch-B reference state for the Sun and planet
 centers. It then advances the CUDA simulation for the one-day interval and
 compares every body's 3D position and velocity with the pinned HORIZONS
-reference. The source fixture is local, so the test never needs network access.
+reference. The test needs neither Python nor network access in the cluster
+container, and both temporary binary datasets are removed after the case ends.

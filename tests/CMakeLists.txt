@@ -161,39 +161,26 @@ if(TARGET nbody::cuda)
         unit/cuda/tree_builder_test.cu)
 
     # Tests that exercise several stages of the tree-building pipeline.
-    add_nbody_cuda_test_target(
-        nbody_cuda_integration_tests
-        integration
+    set(
+        nbody_cuda_integration_sources
         integration/cuda/radix_tree_groups_test.cu
         integration/cuda/radix_to_octree_test.cu
         integration/cuda/sparse_octree_test.cu
         integration/cuda/octree_physics_test.cu
         integration/cuda/particle_octree_pipeline_test.cu
         integration/cuda/simulation_test.cu
-        integration/cuda/two_body_orbit_test.cu)
+        integration/cuda/two_body_orbit_test.cu
+        integration/cuda/solar_system_ephemeris_test.cu
+        support/solar_system_reference_fixture.cpp)
 
-    # Rebuild two small, pinned HORIZONS datasets through the production
-    # Python data tool, advance epoch A with the production Simulation class,
-    # and compare all final position/velocity vectors with epoch B. Keeping it
-    # in a separate executable lets the fixture generation remain scoped to
-    # this one integration case.
-    if(Python3_Interpreter_FOUND AND nbody_numpy_import_status EQUAL 0)
-        add_nbody_cuda_test_target(
-            nbody_cuda_ephemeris_tests
-            integration
-            integration/cuda/solar_system_ephemeris_test.cu)
-        target_compile_definitions(
-            nbody_cuda_ephemeris_tests
-            PRIVATE
-                NBODY_TEST_PYTHON_EXECUTABLE="${Python3_EXECUTABLE}"
-                NBODY_TEST_DATASET_GENERATOR="${PROJECT_SOURCE_DIR}/data/download_solar_system.py"
-                NBODY_TEST_EPHEMERIS_FIXTURE="${PROJECT_SOURCE_DIR}/tests/data/solar_system_ephemeris.json"
-                NBODY_TEST_EPHEMERIS_PREPARER="${PROJECT_SOURCE_DIR}/tests/scripts/prepare_solar_system_reference.py")
-    else()
-        message(
-            STATUS
-            "Python with NumPy is unavailable; the solar-system ephemeris integration test is not registered")
-    endif()
+    # The solar-system fixture writer is C++ and emits two compact datasets at
+    # test runtime, so this integration target has no Python or NumPy runtime
+    # dependency on the cluster.
+
+    add_nbody_cuda_test_target(
+        nbody_cuda_integration_tests
+        integration
+        ${nbody_cuda_integration_sources})
 
     # Exercise the production executable as a separate process. The small
     # helper writes a deterministic binary input without relying on Python or
