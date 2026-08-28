@@ -35,31 +35,25 @@ namespace
                 return "Invalid radix edge metadata";
 
             case 2:
-                return "Invalid radix ancestor while "
-                    "constructing octree";
+                return "Invalid radix ancestor while constructing octree";
 
             case 3:
-                return "Could not find the correct "
-                    "octree parent level";
+                return "Could not find the correct octree parent level";
 
             case 4:
-                return "Two octree nodes attempted to "
-                    "occupy the same parent octant";
+                return "Two octree nodes attempted to occupy the same parent octant";
 
             case 5:
-                return "A radix leaf does not terminate "
-                    "at octree level 10";
+                return "A radix leaf terminates at an invalid octree level";
 
             case 6:
-                return "Generated octree node ID is "
-                    "outside the allocated range";
+                return "Generated octree node ID is outside the allocated range";
 
             case 7:
                 return "Invalid representative Morton key";
 
             default:
-                return "Unknown sparse-octree "
-                    "construction error";
+                return "Unknown sparse-octree construction error";
         }
     }
 } // namespace
@@ -218,12 +212,19 @@ __global__ void materializeSparseOctreeKernel(Octree octree, Tree radixTree, Mor
         }
     }
 
-    //A radix leaf corresponds to an occupied Morton cell at level 10
+    /*
+    * A radix leaf represents one occupied Morton group.
+    *
+    * The corresponding octree leaf is materialized at the
+    * shallowest level that still separates this group from
+    * the other occupied groups.
+    */
     if (radixNode < radixTree.nLeaves)
     {
         const int leaf = firstNode + count - 1;
+        const int leafLevel = octree.level[leaf];
 
-        if (octree.level[leaf] != kOctreeMaxLevel)
+        if (leafLevel <= 0 || leafLevel > kOctreeMaxLevel)
         {
             atomicCAS(errorCode, 0, 5);
             return;

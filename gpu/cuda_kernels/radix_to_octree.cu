@@ -118,9 +118,7 @@ __global__ void computeRadixToOctreePlanKernel(Tree radixTree, const std::uint32
         }
     }
 
-    const int nodeLevel = octreeLevelForRadixNode(radixTree, radixNode);
     const int parentNode = radixTree.parent[radixNode];
-
     int parentLevel = 0;
 
     if (parentNode != -1)
@@ -134,6 +132,21 @@ __global__ void computeRadixToOctreePlanKernel(Tree radixTree, const std::uint32
         }
 
         parentLevel = octreeLevelForRadixNode(radixTree, parentNode);
+    }
+
+    int nodeLevel = 0;
+
+    if (radixNode < radixTree.nLeaves)
+        nodeLevel = parentLevel + 1;
+    else
+        nodeLevel = octreeLevelForRadixNode(radixTree, radixNode);
+
+    if (nodeLevel < 0 || nodeLevel > kOctreeMaxLevel)
+    {
+        atomicCAS(errorCode, 0, 3);
+        radixLevel[radixNode] = 0;
+        edgeNodeCount[radixNode] = 0;
+        return;
     }
 
     if (nodeLevel < parentLevel)

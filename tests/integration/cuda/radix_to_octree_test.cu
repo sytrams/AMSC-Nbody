@@ -299,10 +299,10 @@ TEST_F(RadixToOctreeTest, PlansSingleOccupiedMortonCell)
     runExactCase(
         "single occupied Morton cell",
         {0u},
-        {10},
-        {10},
+        {1},
+        {1},
         {0},
-        11);
+        2);
 }
 
 TEST_F(RadixToOctreeTest, PlansTwoLevelOneOctants)
@@ -310,10 +310,10 @@ TEST_F(RadixToOctreeTest, PlansTwoLevelOneOctants)
     runExactCase(
         "two different level-one octants",
         {0u, 1u << 29},
-        {10, 10, 0},
-        {10, 10, 0},
-        {0, 10, 20},
-        21);
+        {1, 1, 0},
+        {1, 1, 0},
+        {0, 1, 2},
+        3);
 }
 
 TEST_F(RadixToOctreeTest, PlansCellsSharingLevelOne)
@@ -321,10 +321,10 @@ TEST_F(RadixToOctreeTest, PlansCellsSharingLevelOne)
     runExactCase(
         "two cells sharing level one",
         {0u, 1u << 26},
-        {10, 10, 1},
-        {9, 9, 1},
-        {0, 9, 18},
-        20);
+        {2, 2, 1},
+        {1, 1, 1},
+        {0, 1, 2},
+        4);
 }
 
 TEST_F(RadixToOctreeTest, PlansDuplicateParticlesInOneCell)
@@ -332,10 +332,10 @@ TEST_F(RadixToOctreeTest, PlansDuplicateParticlesInOneCell)
     runExactCase(
         "duplicate particles in one Morton cell",
         {7u, 7u, 7u, 7u},
-        {10},
-        {10},
+        {1},
+        {1},
         {0},
-        11);
+        2);
 }
 
 TEST_F(RadixToOctreeTest, RejectsKeysOutsideThirtyBitLayout)
