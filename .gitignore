@@ -35,6 +35,10 @@ build*/
 *.exe
 *.out
 *.app
+nbody-stream/
+nbody-frames/
+*.nbsnap
+*.nbsnap.part
 
 #vscode
 .vscode

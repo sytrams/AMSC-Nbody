@@ -39,6 +39,27 @@ gtest_discover_tests(
         LABELS "cpu-unit"
         TIMEOUT 30)
 
+if(TARGET nbody::streaming)
+    add_executable(
+        nbody_streaming_unit_tests
+        unit/cpu/streaming_frame_test.cpp)
+    set_target_properties(
+        nbody_streaming_unit_tests
+        PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+    target_link_libraries(
+        nbody_streaming_unit_tests
+        PRIVATE
+            nbody::streaming
+            GTest::gtest_main)
+    gtest_discover_tests(
+        nbody_streaming_unit_tests
+        DISCOVERY_MODE PRE_TEST
+        TEST_PREFIX "cpu."
+        PROPERTIES
+            LABELS "cpu-unit"
+            TIMEOUT 30)
+endif()
+
 # The data tools depend on NumPy. Register their standard-library unittests
 # when both Python and that optional runtime dependency are available.
 find_package(Python3 COMPONENTS Interpreter QUIET)
