@@ -3,9 +3,12 @@
 #include <thrust/copy.h>
 #include <thrust/device_vector.h>
 
+#include <array>
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <iomanip>
+#include <iostream>
 #include <vector>
 
 #include "barnes_hut.hpp"
@@ -449,6 +452,142 @@ OrbitError runQuarterOrbit(
     return {
         std::sqrt(positionErrorSquared),
         std::sqrt(velocityErrorSquared)};
+}
+
+TEST_F(
+    TwoBodyOrbitTest,
+    CharacterizesLeapfrogConvergence)
+{
+    constexpr std::array<int, 4> stepCounts{
+        32,
+        64,
+        128,
+        256};
+
+    std::array<OrbitError, stepCounts.size()>
+        errors{};
+
+    std::cout
+        << "\nLeapfrog convergence: two-body quarter orbit\n"
+        << "steps"
+        << '\t'
+        << "position_error"
+        << '\t'
+        << "velocity_error"
+        << '\t'
+        << "position_ratio"
+        << '\t'
+        << "velocity_ratio"
+        << '\t'
+        << "position_order"
+        << '\t'
+        << "velocity_order"
+        << '\n';
+
+    for (std::size_t index = 0;
+         index < stepCounts.size();
+         ++index)
+    {
+        errors[index] =
+            runQuarterOrbit(
+                stepCounts[index]);
+
+        double positionRatio = 0.0;
+        double velocityRatio = 0.0;
+
+        double positionOrder = 0.0;
+        double velocityOrder = 0.0;
+
+        if (index > 0)
+        {
+            positionRatio =
+                errors[index - 1].position /
+                errors[index].position;
+
+            velocityRatio =
+                errors[index - 1].velocity /
+                errors[index].velocity;
+
+            positionOrder =
+                std::log2(positionRatio);
+
+            velocityOrder =
+                std::log2(velocityRatio);
+
+            /*
+            * Refining the timestep must improve
+            * the numerical solution.
+            */
+            EXPECT_LT(
+                errors[index].position,
+                errors[index - 1].position);
+
+            EXPECT_LT(
+                errors[index].velocity,
+                errors[index - 1].velocity);
+
+            /*
+            * Leapfrog / Kick-Drift-Kick is a
+            * second-order integration method.
+            *
+            * Therefore:
+            *
+            *     error(dt) ~ C dt^2
+            *
+            * and halving dt should reduce the error
+            * approximately by a factor of four:
+            *
+            *     error(dt) / error(dt/2) ~ 4
+            *
+            * Hence:
+            *
+            *     p = log2(error(dt) / error(dt/2))
+            *
+            * should be approximately 2.
+            */
+            EXPECT_GT(
+                positionOrder,
+                1.8);
+
+            EXPECT_LT(
+                positionOrder,
+                2.2);
+
+            EXPECT_GT(
+                velocityOrder,
+                1.8);
+
+            EXPECT_LT(
+                velocityOrder,
+                2.2);
+        }
+
+        EXPECT_TRUE(
+            std::isfinite(
+                errors[index].position));
+
+        EXPECT_TRUE(
+            std::isfinite(
+                errors[index].velocity));
+
+        std::cout
+            << stepCounts[index]
+            << '\t'
+            << std::scientific
+            << std::setprecision(8)
+            << errors[index].position
+            << '\t'
+            << errors[index].velocity
+            << '\t'
+            << positionRatio
+            << '\t'
+            << velocityRatio
+            << '\t'
+            << positionOrder
+            << '\t'
+            << velocityOrder
+            << '\n';
+    }
 }
 
 TEST_F(
