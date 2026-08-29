@@ -32,6 +32,8 @@ from typing import Iterable, Iterator, Mapping, Sequence, TextIO
 
 import numpy as np
 
+from particle_types import ParticleType, VALID_PARTICLE_TYPES
+
 
 HORIZONS_API_URL = "https://ssd.jpl.nasa.gov/api/horizons.api"
 HORIZONS_GM_URL = "https://ssd.jpl.nasa.gov/ftp/xfr/gm_Horizons.pck"
@@ -92,23 +94,33 @@ class ParticleDatasetWriter:
         self._paths = {
             name: temporary_root / f"{name}.f64" for name in COMPONENT_NAMES
         }
+        self._paths["type"] = temporary_root / "type.u8"
         self._handles = {
             name: path.open("wb") for name, path in self._paths.items()
         }
         self.count = 0
         self._finalized = False
 
-    def append(self, mass: np.ndarray, state: np.ndarray) -> None:
+    def append(
+        self, mass: np.ndarray, state: np.ndarray, particle_type: np.ndarray
+    ) -> None:
         mass = np.asarray(mass, dtype="<f8")
         state = np.asarray(state, dtype="<f8")
+        particle_type = np.asarray(particle_type, dtype="<u1")
         if state.shape != (mass.size, 6):
             raise ValueError("state must have shape (particle_count, 6)")
+        if particle_type.shape != (mass.size,):
+            raise ValueError("particle_type must have shape (particle_count,)")
+        valid_type_values = tuple(int(value) for value in VALID_PARTICLE_TYPES)
+        if not np.all(np.isin(particle_type, valid_type_values)):
+            raise ValueError("particle_type contains an unsupported value")
         if not np.all(np.isfinite(mass)) or not np.all(np.isfinite(state)):
             raise ValueError("particle data must be finite")
 
         mass.tofile(self._handles["mass"])
         for index, name in enumerate(COMPONENT_NAMES[1:]):
             state[:, index].astype("<f8", copy=False).tofile(self._handles[name])
+        particle_type.tofile(self._handles["type"])
         self.count += mass.size
 
     def finalize(self) -> None:
@@ -124,6 +136,8 @@ class ParticleDatasetWriter:
                 for name in COMPONENT_NAMES:
                     with self._paths[name].open("rb") as component:
                         shutil.copyfileobj(component, output, length=8 * 1024 * 1024)
+                with self._paths["type"].open("rb") as component:
+                    shutil.copyfileobj(component, output, length=8 * 1024 * 1024)
             os.replace(partial_path, self.output_path)
             self._finalized = True
         finally:
@@ -356,7 +370,7 @@ def parse_major_body_index(text: str) -> list[MajorBody]:
             continue
         spkid = int(identifier)
         if spkid == 10:
-            category = "sun"
+            category = "star"
         elif spkid in PLANET_IDS:
             category = "planet"
         elif is_planetary_moon(spkid):
@@ -371,7 +385,7 @@ def parse_major_body_index(text: str) -> list[MajorBody]:
 
     if 10 not in seen or not PLANET_IDS.issubset(seen):
         raise ValueError("HORIZONS major-body list is missing the Sun or a planet")
-    category_order = {"sun": 0, "planet": 1, "moon": 2}
+    category_order = {"star": 0, "planet": 1, "moon": 2}
     bodies.sort(key=lambda body: (category_order[body.category], body.spkid))
     return bodies
 
@@ -874,11 +888,22 @@ def build_datasets(args: argparse.Namespace) -> dict[str, object]:
                 ],
                 dtype=np.float64,
             )
+            major_type = np.asarray(
+                [
+                    {
+                        "star": ParticleType.STAR,
+                        "planet": ParticleType.PLANET,
+                        "moon": ParticleType.MOON,
+                    }[body.category]
+                    for body in major_bodies
+                ],
+                dtype=np.uint8,
+            )
             for epoch_index, writer in enumerate((writer_a, writer_b)):
                 state = np.vstack(
                     [major_states[body.spkid][epoch_index] for body in major_bodies]
                 )
-                writer.append(major_mass, state)
+                writer.append(major_mass, state, major_type)
             for index, (body, mass) in enumerate(zip(major_bodies, major_mass)):
                 source = "JPL GM" if body.spkid in gm_values else "massless (unknown GM)"
                 write_manifest_row(
@@ -921,8 +946,11 @@ def build_datasets(args: argparse.Namespace) -> dict[str, object]:
                 )
                 if not np.all(finite):
                     raise ValueError("asteroid propagation generated non-finite data")
-                writer_a.append(batch.mass, state_a)
-                writer_b.append(batch.mass, state_b)
+                asteroid_type = np.full(
+                    len(records), ParticleType.ASTEROID, dtype=np.uint8
+                )
+                writer_a.append(batch.mass, state_a, asteroid_type)
+                writer_b.append(batch.mass, state_b, asteroid_type)
                 base_index = len(major_bodies) + asteroid_count
                 for offset, (record, mass, source) in enumerate(
                     zip(batch.records, batch.mass, batch.mass_sources)
@@ -970,7 +998,10 @@ def build_datasets(args: argparse.Namespace) -> dict[str, object]:
 
     particle_count = len(major_bodies) + asteroid_count
     metadata: dict[str, object] = {
-        "format": "AMSC-Nbody planar little-endian float64, uint64 count header",
+        "format": (
+            "AMSC-Nbody planar little-endian: uint64 count header, seven float64 "
+            "blocks, then one uint8 particle-type block"
+        ),
         "particle_count": particle_count,
         "major_body_count": len(major_bodies),
         "asteroid_count": asteroid_count,

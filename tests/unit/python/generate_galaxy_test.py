@@ -58,13 +58,22 @@ class TwoBodyGenerationTest(unittest.TestCase):
             generate_galaxy.write_particle_file(path, data)
             raw = path.read_bytes()
 
-        self.assertEqual(len(raw), 8 + 2 * 7 * 8)
+        self.assertEqual(len(raw), 8 + 2 * 7 * 8 + 2)
         self.assertEqual(struct.unpack_from("<Q", raw)[0], 2)
         stored_values = struct.unpack_from("<14d", raw, 8)
         expected_values = tuple(
             float(value) for component in data for value in component
         )
         self.assertEqual(stored_values, expected_values)
+        self.assertEqual(
+            raw[8 + 2 * 7 * 8 :],
+            bytes(
+                (
+                    generate_galaxy.ParticleType.STAR,
+                    generate_galaxy.ParticleType.STAR,
+                )
+            ),
+        )
 
     def test_rejects_particle_count_other_than_two(self):
         with contextlib.redirect_stderr(io.StringIO()):

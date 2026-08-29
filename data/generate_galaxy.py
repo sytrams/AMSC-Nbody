@@ -6,6 +6,8 @@ from pathlib import Path
 
 import numpy as np
 
+from particle_types import ParticleType, VALID_PARTICLE_TYPES
+
 
 GRAVITATIONAL_CONSTANT = 6.67430e-11
 DEFAULT_PARTICLE_COUNT = 100_000
@@ -110,16 +112,25 @@ def generate_data(args):
     return generate_random_data(args)
 
 
-def write_particle_file(path, data):
+def write_particle_file(path, data, particle_types=None):
     particle_count = len(data[0])
     if any(len(component) != particle_count for component in data):
         raise ValueError("all particle components must have the same length")
+    if particle_types is None:
+        particle_types = np.full(particle_count, ParticleType.STAR, dtype=np.uint8)
+    particle_types = np.asarray(particle_types, dtype="<u1")
+    if particle_types.shape != (particle_count,):
+        raise ValueError("particle_types must have shape (particle_count,)")
+    valid_type_values = tuple(int(value) for value in VALID_PARTICLE_TYPES)
+    if not np.all(np.isin(particle_types, valid_type_values)):
+        raise ValueError("particle_types contains an unsupported value")
 
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("wb") as output:
         output.write(struct.pack("<Q", particle_count))
         for component in data:
             component.astype("<f8", copy=False).tofile(output)
+        particle_types.tofile(output)
 
 
 def two_body_orbital_period(mass_value, separation):

@@ -32,6 +32,9 @@ struct ParticleData {
   std::vector<double> vx{0.1, 0.2};
   std::vector<double> vy{0.3, 0.4};
   std::vector<double> vz{0.5, 0.6};
+  std::vector<std::uint8_t> type{
+      static_cast<std::uint8_t>(ParticleType::Star),
+      static_cast<std::uint8_t>(ParticleType::Asteroid)};
 
   std::size_t size() const { return mass.size(); }
 };
@@ -66,6 +69,13 @@ std::vector<double> copyToHost(const double *source, std::size_t count) {
   return result;
 }
 
+std::vector<std::uint8_t> copyToHost(const std::uint8_t *source,
+                                     std::size_t count) {
+  std::vector<std::uint8_t> result(count);
+  thrust::copy_n(thrust::device_pointer_cast(source), count, result.begin());
+  return result;
+}
+
 void expectDeviceBlockEquals(const std::vector<double> &expected,
                              const double *actual) {
   ASSERT_NE(actual, nullptr);
@@ -77,7 +87,8 @@ void expectDeviceBlockEquals(const std::vector<double> &expected,
 }
 
 template <typename View>
-void expectViewEquals(const ParticleData &expected, const View &actual) {
+void expectViewEquals(const ParticleData &expected, const View &actual,
+                      bool hasExplicitTypes = false) {
   EXPECT_EQ(actual.count, expected.size());
   expectDeviceBlockEquals(expected.mass, actual.mass);
   expectDeviceBlockEquals(expected.x, actual.x);
@@ -86,6 +97,15 @@ void expectViewEquals(const ParticleData &expected, const View &actual) {
   expectDeviceBlockEquals(expected.vx, actual.vx);
   expectDeviceBlockEquals(expected.vy, actual.vy);
   expectDeviceBlockEquals(expected.vz, actual.vz);
+  ASSERT_NE(actual.type, nullptr);
+  const auto actualTypes = copyToHost(actual.type, actual.count);
+  const std::vector<std::uint8_t> expectedTypes =
+      hasExplicitTypes
+          ? expected.type
+          : std::vector<std::uint8_t>(
+                expected.size(),
+                static_cast<std::uint8_t>(ParticleType::Unknown));
+  EXPECT_EQ(actualTypes, expectedTypes);
 }
 
 } // namespace
@@ -113,7 +133,7 @@ protected:
                  static_cast<std::streamsize>(values.size() * sizeof(double)));
   }
 
-  void writePlanarFile(HeaderWidth width) {
+  void writePlanarFile(HeaderWidth width, bool includeTypes = false) {
     std::ofstream output(testFile, std::ios::binary | std::ios::trunc);
     ASSERT_TRUE(output.is_open());
 
@@ -125,6 +145,11 @@ protected:
     writeBlock(output, particleData.vx);
     writeBlock(output, particleData.vy);
     writeBlock(output, particleData.vz);
+    if (includeTypes) {
+      output.write(
+          reinterpret_cast<const char *>(particleData.type.data()),
+          static_cast<std::streamsize>(particleData.type.size()));
+    }
     ASSERT_TRUE(output.good());
   }
 
@@ -168,6 +193,24 @@ TEST_F(ParticleFileTest, LoadsEveryBlockWith64BitHeader) {
   expectViewEquals(particleData, view);
 }
 
+TEST_F(ParticleFileTest, LoadsParticleTypesWith32BitHeader) {
+  writePlanarFile(HeaderWidth::Bits32, true);
+  std::ifstream input(testFile, std::ios::binary);
+
+  Particles particles(input);
+
+  expectViewEquals(particleData, particles.device_view(), true);
+}
+
+TEST_F(ParticleFileTest, LoadsParticleTypesWith64BitHeader) {
+  writePlanarFile(HeaderWidth::Bits64, true);
+  std::ifstream input(testFile, std::ios::binary);
+
+  Particles particles(input);
+
+  expectViewEquals(particleData, particles.device_view(), true);
+}
+
 TEST_F(ParticleFileTest, LoadsRegardlessOfInitialStreamPosition) {
   writePlanarFile(HeaderWidth::Bits32);
   std::ifstream input(testFile, std::ios::binary);
@@ -204,6 +247,8 @@ TEST_F(ParticleFileTest, ConstDeviceViewProvidesReadOnlyParticleStorage) {
   expectViewEquals(particleData, view);
 
   static_assert(std::is_same_v<decltype(view.x), const double *>);
+  static_assert(
+      std::is_same_v<decltype(view.type), const std::uint8_t *>);
 }
 
 TEST_F(ParticleFileTest, RejectsUnopenedStream) {
@@ -253,6 +298,19 @@ TEST_F(ParticleFileTest, RejectsTrailingParticleData) {
   std::ifstream input(testFile, std::ios::binary);
 
   expectRuntimeErrorContaining(input, "Unsupported particle file layout");
+}
+
+TEST_F(ParticleFileTest, RejectsUnsupportedParticleType) {
+  writePlanarFile(HeaderWidth::Bits64, true);
+  std::fstream output(testFile, std::ios::binary | std::ios::in | std::ios::out);
+  ASSERT_TRUE(output.is_open());
+  output.seekp(-1, std::ios::end);
+  const std::uint8_t invalidType = 255;
+  output.write(reinterpret_cast<const char *>(&invalidType), sizeof(invalidType));
+  output.close();
+  std::ifstream input(testFile, std::ios::binary);
+
+  expectRuntimeErrorContaining(input, "Unsupported particle type value");
 }
 
 TEST_F(ParticleFileTest, Rejects64BitCountBeyondSupportedRange) {

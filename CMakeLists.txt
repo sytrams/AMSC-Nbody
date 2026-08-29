@@ -128,7 +128,9 @@ if(BUILD_TESTING)
         INTERFACE
             FILE_SET HEADERS
             BASE_DIRS ${PROJECT_SOURCE_DIR}
-            FILES src/particle.hpp)
+            FILES
+                src/particle.hpp
+                src/particle_type.hpp)
     target_include_directories(
         nbody_particle
         INTERFACE
@@ -142,6 +144,7 @@ endif()
 if(APPLE AND NBODY_BUILD_VIEWER)
     enable_language(OBJCXX)
     add_executable(nbody_viewer apps/viewer/main.mm)
+    target_include_directories(nbody_viewer PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_features(nbody_viewer PRIVATE cxx_std_23)
     target_link_libraries(
         nbody_viewer

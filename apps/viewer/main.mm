@@ -9,6 +9,11 @@
 #include <vector>
 #include <memory>
 #include <limits>
+#include <algorithm>
+#include <cstddef>
+#include <cstdint>
+
+#include "particle_type.hpp"
 
 namespace {
 constexpr const char* kDefaultViewerFile = "src/milky_way_particles_complete.bin";
@@ -16,6 +21,7 @@ constexpr const char* kDefaultViewerFile = "src/milky_way_particles_complete.bin
 struct ViewerFileHeader {
     uint64_t num_particles;
     std::streamoff header_bytes;
+    bool has_particle_types;
 };
 
 ViewerFileHeader detect_viewer_file_header(std::ifstream& inFile) {
@@ -28,26 +34,39 @@ ViewerFileHeader detect_viewer_file_header(std::ifstream& inFile) {
 
     constexpr std::streamoff bytes_per_particle = static_cast<std::streamoff>(7 * sizeof(double));
 
+    const auto matchesLayout = [&](uint64_t count, std::streamoff headerBytes, bool hasParticleTypes) {
+        const auto typeBytes = hasParticleTypes ? static_cast<std::streamoff>(count) : std::streamoff{0};
+        return fileSize == headerBytes + static_cast<std::streamoff>(count) * bytes_per_particle + typeBytes;
+    };
+
     inFile.seekg(0, std::ios::beg);
     uint64_t n64 = 0;
     inFile.read(reinterpret_cast<char*>(&n64), sizeof(n64));
-    if (inFile
-        && n64 > 0
-        && fileSize == static_cast<std::streamoff>(sizeof(uint64_t)) + static_cast<std::streamoff>(n64) * bytes_per_particle) {
-        return {n64, static_cast<std::streamoff>(sizeof(uint64_t))};
+    if (inFile && n64 > 0) {
+        const auto headerBytes = static_cast<std::streamoff>(sizeof(uint64_t));
+        if (matchesLayout(n64, headerBytes, true)) {
+            return {n64, headerBytes, true};
+        }
+        if (matchesLayout(n64, headerBytes, false)) {
+            return {n64, headerBytes, false};
+        }
     }
 
     inFile.clear();
     inFile.seekg(0, std::ios::beg);
     uint32_t n32 = 0;
     inFile.read(reinterpret_cast<char*>(&n32), sizeof(n32));
-    if (inFile
-        && n32 > 0
-        && fileSize == static_cast<std::streamoff>(sizeof(uint32_t)) + static_cast<std::streamoff>(n32) * bytes_per_particle) {
-        return {n32, static_cast<std::streamoff>(sizeof(uint32_t))};
+    if (inFile && n32 > 0) {
+        const auto headerBytes = static_cast<std::streamoff>(sizeof(uint32_t));
+        if (matchesLayout(n32, headerBytes, true)) {
+            return {n32, headerBytes, true};
+        }
+        if (matchesLayout(n32, headerBytes, false)) {
+            return {n32, headerBytes, false};
+        }
     }
 
-    throw std::runtime_error("Unsupported viewer file layout. Expected planar doubles with a 32-bit or 64-bit particle count header.");
+    throw std::runtime_error("Unsupported viewer file layout. Expected planar doubles with a 32-bit or 64-bit particle count header and an optional uint8 particle-type block.");
 }
 
 bool extract_viewer_file_arg(int& argc, char** argv, std::string& viewer_file) {
@@ -82,6 +101,7 @@ bool extract_viewer_file_arg(int& argc, char** argv, std::string& viewer_file) {
 
 struct ParticleData {
     simd_float3 position;
+    std::uint32_t type;
 };
 
 // Internal loading class to handle different binary formats
@@ -89,6 +109,7 @@ class MilkyWayLoader {
 public:
     uint64_t num_particles;
     std::unique_ptr<double[]> x, y, z;
+    std::unique_ptr<std::uint8_t[]> type;
 
     explicit MilkyWayLoader(const char* file_path) {
         std::ifstream inFile(file_path, std::ios::binary);
@@ -99,18 +120,33 @@ public:
         x = std::make_unique<double[]>(num_particles);
         y = std::make_unique<double[]>(num_particles);
         z = std::make_unique<double[]>(num_particles);
+        type = std::make_unique<std::uint8_t[]>(num_particles);
 
         inFile.clear();
-        inFile.seekg(header.header_bytes, std::ios::beg); inFile.seekg(num_particles * sizeof(double), std::ios::cur);
-
-        size_t bytes = num_particles * sizeof(double);
-        inFile.seekg(bytes, std::ios::cur);
+        inFile.seekg(header.header_bytes, std::ios::beg);
+        const auto bytes = static_cast<std::streamoff>(num_particles * sizeof(double));
+        inFile.seekg(bytes, std::ios::cur); // mass
         inFile.read(reinterpret_cast<char*>(x.get()), bytes);
         inFile.read(reinterpret_cast<char*>(y.get()), bytes);
         inFile.read(reinterpret_cast<char*>(z.get()), bytes);
 
         if (!inFile) {
             throw std::runtime_error("Failed to read particle coordinates from viewer file.");
+        }
+
+        if (header.has_particle_types) {
+            inFile.seekg(3 * bytes, std::ios::cur); // vx, vy, vz
+            inFile.read(reinterpret_cast<char*>(type.get()), static_cast<std::streamsize>(num_particles));
+            if (!inFile) {
+                throw std::runtime_error("Failed to read particle types from viewer file.");
+            }
+            for (uint64_t index = 0; index < num_particles; ++index) {
+                if (!isValidParticleType(type[index])) {
+                    throw std::runtime_error("Viewer file contains an unsupported particle type.");
+                }
+            }
+        } else {
+            std::fill_n(type.get(), num_particles, static_cast<std::uint8_t>(ParticleType::Unknown));
         }
         std::cout << "Successfully loaded " << num_particles << " particles from " << file_path << std::endl;
     }
@@ -124,6 +160,7 @@ public:
 @property (nonatomic, assign) NSUInteger numParticles;
 
 - (void)handleKeyDown:(NSEvent *)event;
+- (void)handleScrollWheel:(NSEvent *)event;
 @end
 
 @implementation MetalRenderer {
@@ -186,6 +223,9 @@ public:
     vertexDescriptor.attributes[0].format = MTLVertexFormatFloat3;
     vertexDescriptor.attributes[0].offset = 0;
     vertexDescriptor.attributes[0].bufferIndex = 0;
+    vertexDescriptor.attributes[1].format = MTLVertexFormatUInt;
+    vertexDescriptor.attributes[1].offset = offsetof(ParticleData, type);
+    vertexDescriptor.attributes[1].bufferIndex = 0;
     vertexDescriptor.layouts[0].stride = sizeof(ParticleData);
     pipelineDescriptor.vertexDescriptor = vertexDescriptor;
     
@@ -228,6 +268,15 @@ public:
     }
 }
 
+- (void)handleScrollWheel:(NSEvent *)event {
+    const float gestureScale = event.hasPreciseScrollingDeltas ? 1.0f : 12.0f;
+    const float worldUnitsPerPoint =
+        _maxCoord * 0.0025f * gestureScale / std::max(_zoomFactor, 0.001f);
+
+    // Intentionally invert the vertical two-finger gesture direction.
+    _panOffset.y -= static_cast<float>(event.scrollingDeltaY) * worldUnitsPerPoint;
+}
+
 - (void)drawInMTKView:(nonnull MTKView *)view {
     _viewSize = view.drawableSize;
     [self updateProjection];
@@ -260,6 +309,9 @@ public:
 - (void)keyDown:(NSEvent *)event {
     [_renderer handleKeyDown:event];
 }
+- (void)scrollWheel:(NSEvent *)event {
+    [_renderer handleScrollWheel:event];
+}
 @end
 
 void run_metal_viewer(const char* file_path) {
@@ -268,6 +320,7 @@ void run_metal_viewer(const char* file_path) {
         std::vector<ParticleData> particles(loader.num_particles);
         for (size_t i = 0; i < loader.num_particles; ++i) {
             particles[i].position = (simd_float3){ (float)loader.x[i], (float)loader.y[i], (float)loader.z[i] };
+            particles[i].type = loader.type[i];
         }
         
         [NSApplication sharedApplication];

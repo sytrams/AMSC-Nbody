@@ -55,6 +55,19 @@ class SourceParsingTest(unittest.TestCase):
         self.assertNotIn(31, identifiers)
         self.assertNotIn(-61, identifiers)
         self.assertNotIn(120050000, identifiers)
+        self.assertEqual(bodies[0].category, "star")
+        self.assertTrue(
+            all(
+                body.category == "planet"
+                for body in bodies[1 : 1 + len(solar.PLANET_IDS)]
+            )
+        )
+        self.assertTrue(
+            all(
+                body.category == "moon"
+                for body in bodies[1 + len(solar.PLANET_IDS) :]
+            )
+        )
         provisional = next(body for body in bodies if body.spkid == 55501)
         self.assertEqual(provisional.name, "S2003_J2")
 
@@ -169,10 +182,13 @@ class ParticleWriterTest(unittest.TestCase):
             [[1.0, 2.0, 3.0, 4.0, 5.0, 6.0],
              [7.0, 8.0, 9.0, 10.0, 11.0, 12.0]]
         )
+        particle_type = np.asarray(
+            [solar.ParticleType.STAR, solar.ParticleType.ASTEROID], dtype=np.uint8
+        )
         with tempfile.TemporaryDirectory() as temporary_directory:
             path = Path(temporary_directory) / "particles.bin"
             with solar.ParticleDatasetWriter(path) as writer:
-                writer.append(mass, state)
+                writer.append(mass, state, particle_type)
                 writer.finalize()
             raw = path.read_bytes()
 
@@ -182,6 +198,10 @@ class ParticleWriterTest(unittest.TestCase):
             values,
             (2.0, 3.0, 1.0, 7.0, 2.0, 8.0, 3.0, 9.0,
              4.0, 10.0, 5.0, 11.0, 6.0, 12.0),
+        )
+        self.assertEqual(
+            raw[8 + 14 * 8 :],
+            bytes((solar.ParticleType.STAR, solar.ParticleType.ASTEROID)),
         )
 
 
