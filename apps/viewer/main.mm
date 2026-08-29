@@ -10,8 +10,12 @@
 #include <memory>
 #include <limits>
 #include <algorithm>
+#include <charconv>
 #include <cstddef>
 #include <cstdint>
+#include <optional>
+#include <string_view>
+#include <system_error>
 
 #include "particle_type.hpp"
 
@@ -69,7 +73,18 @@ ViewerFileHeader detect_viewer_file_header(std::ifstream& inFile) {
     throw std::runtime_error("Unsupported viewer file layout. Expected planar doubles with a 32-bit or 64-bit particle count header and an optional uint8 particle-type block.");
 }
 
-bool extract_viewer_file_arg(int& argc, char** argv, std::string& viewer_file) {
+struct ViewerOptions {
+    std::string file = kDefaultViewerFile;
+    std::uint64_t step = 0;
+    std::optional<std::uint64_t> totalSteps;
+};
+
+bool parseUnsigned(std::string_view text, std::uint64_t& value) {
+    const auto result = std::from_chars(text.data(), text.data() + text.size(), value);
+    return result.ec == std::errc{} && result.ptr == text.data() + text.size();
+}
+
+bool extract_viewer_args(int& argc, char** argv, ViewerOptions& options) {
     int write_index = 1;
 
     for (int read_index = 1; read_index < argc; ++read_index) {
@@ -81,13 +96,53 @@ bool extract_viewer_file_arg(int& argc, char** argv, std::string& viewer_file) {
                 return false;
             }
 
-            viewer_file = argv[++read_index];
+            options.file = argv[++read_index];
             continue;
         }
 
         constexpr std::string_view file_prefix = "--file=";
         if (arg.rfind(file_prefix.data(), 0) == 0) {
-            viewer_file = arg.substr(file_prefix.size());
+            options.file = arg.substr(file_prefix.size());
+            continue;
+        }
+
+        if (arg == "--step" || arg == "--total-steps") {
+            if (read_index + 1 >= argc) {
+                std::cerr << "Missing value for " << arg << '\n';
+                return false;
+            }
+            std::uint64_t value = 0;
+            if (!parseUnsigned(argv[++read_index], value) ||
+                (arg == "--total-steps" && value == 0)) {
+                std::cerr << "Invalid value for " << arg << '\n';
+                return false;
+            }
+            if (arg == "--step") {
+                options.step = value;
+            } else {
+                options.totalSteps = value;
+            }
+            continue;
+        }
+
+        constexpr std::string_view step_prefix = "--step=";
+        constexpr std::string_view total_steps_prefix = "--total-steps=";
+        const bool is_step = arg.rfind(step_prefix.data(), 0) == 0;
+        const bool is_total_steps = arg.rfind(total_steps_prefix.data(), 0) == 0;
+        if (is_step || is_total_steps) {
+            const auto prefix_size = is_step ? step_prefix.size() : total_steps_prefix.size();
+            std::uint64_t value = 0;
+            if (!parseUnsigned(std::string_view(arg).substr(prefix_size), value) ||
+                (is_total_steps && value == 0)) {
+                std::cerr << "Invalid value for "
+                          << (is_step ? "--step" : "--total-steps") << '\n';
+                return false;
+            }
+            if (is_step) {
+                options.step = value;
+            } else {
+                options.totalSteps = value;
+            }
             continue;
         }
 
@@ -95,6 +150,10 @@ bool extract_viewer_file_arg(int& argc, char** argv, std::string& viewer_file) {
     }
 
     argc = write_index;
+    if (options.totalSteps && options.step > *options.totalSteps) {
+        std::cerr << "--step cannot be greater than --total-steps\n";
+        return false;
+    }
     return true;
 }
 }  // namespace
@@ -314,9 +373,9 @@ public:
 }
 @end
 
-void run_metal_viewer(const char* file_path) {
+void run_metal_viewer(const ViewerOptions& options) {
     try {
-        MilkyWayLoader loader(file_path);
+        MilkyWayLoader loader(options.file.c_str());
         std::vector<ParticleData> particles(loader.num_particles);
         for (size_t i = 0; i < loader.num_particles; ++i) {
             particles[i].position = (simd_float3){ (float)loader.x[i], (float)loader.y[i], (float)loader.z[i] };
@@ -331,7 +390,18 @@ void run_metal_viewer(const char* file_path) {
                                                        styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskResizable
                                                          backing:NSBackingStoreBuffered
                                                            defer:NO];
-        [window setTitle:@"N-Body Milky Way Viewer (Interactive Mode)"];
+        NSString *title = nil;
+        if (options.totalSteps) {
+            title = [NSString stringWithFormat:
+                @"N-Body Viewer (Interactive Mode) - Step %llu/%llu",
+                static_cast<unsigned long long>(options.step),
+                static_cast<unsigned long long>(*options.totalSteps)];
+        } else {
+            title = [NSString stringWithFormat:
+                @"N-Body Viewer (Interactive Mode) - Step %llu/?",
+                static_cast<unsigned long long>(options.step)];
+        }
+        [window setTitle:title];
         [window makeKeyAndOrderFront:nil];
         
         id<MTLDevice> device = MTLCreateSystemDefaultDevice();
@@ -353,11 +423,11 @@ void run_metal_viewer(const char* file_path) {
 }
 
 int main(int argc, char **argv) {
-    std::string viewer_file = kDefaultViewerFile;
-    if (!extract_viewer_file_arg(argc, argv, viewer_file)) {
-        return 1;
+    ViewerOptions options;
+    if (!extract_viewer_args(argc, argv, options)) {
+        return 2;
     }
 
-    run_metal_viewer(viewer_file.c_str());
+    run_metal_viewer(options);
     return 0;
 }
