@@ -385,6 +385,7 @@ jobs:
 
       - name: Run tests on a PBS GPU node
         id: tests
+        continue-on-error: true
         timeout-minutes: 60
         shell: bash
         env:
@@ -835,6 +836,61 @@ jobs:
           echo "Could not collect results after VPN recovery attempts" >&2
           exit 1
 
+      - name: Validate cluster test result
+        id: validate_tests
+        if: ${{ always() && steps.tests.outcome != 'skipped' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          results_path="$RUNNER_TEMP/cluster-test-results"
+          status_path="$results_path/test-exit-code"
+          junit_path="$results_path/ctest-results.xml"
+
+          if [[ ! -s "$status_path" ]]; then
+            echo "The cluster did not provide a test exit code" >&2
+            exit 1
+          fi
+
+          test_exit_code="$(<"$status_path")"
+          if [[ ! "$test_exit_code" =~ ^[0-9]+$ ]]; then
+            echo "Invalid cluster test exit code: $test_exit_code" >&2
+            exit 1
+          fi
+          if (( test_exit_code != 0 )); then
+            echo "The cluster test suite exited with status $test_exit_code" >&2
+            exit "$test_exit_code"
+          fi
+
+          if [[ ! -s "$junit_path" ]]; then
+            echo "The cluster did not provide a CTest JUnit report" >&2
+            exit 1
+          fi
+
+          python3 - "$junit_path" <<'PYTHON'
+          import sys
+          from pathlib import Path
+          import xml.etree.ElementTree as ET
+
+          report = Path(sys.argv[1])
+          cases = list(ET.parse(report).getroot().iter("testcase"))
+          failed = [
+              case
+              for case in cases
+              if case.find("failure") is not None or case.find("error") is not None
+          ]
+          skipped = [case for case in cases if case.find("skipped") is not None]
+
+          if not cases:
+              raise SystemExit("CTest did not report any tests")
+          if failed or skipped:
+              raise SystemExit(
+                  f"CTest reported {len(failed)} failed and {len(skipped)} skipped tests"
+              )
+
+          print(f"Validated {len(cases)} passing cluster tests")
+          PYTHON
+
       - name: Stop VPN
         cancel: vpn
 
@@ -853,8 +909,9 @@ jobs:
             echo "- VPN background process: \`${{ steps.vpn.outcome }}\`"
             echo "- VPN readiness check: \`${{ steps.vpn_wait.outcome }}\`"
             echo "- SSH connectivity check: \`${{ steps.ssh.outcome }}\`"
-            echo "- PBS GPU tests: \`${{ steps.tests.outcome }}\`"
+            echo "- PBS orchestration: \`${{ steps.tests.outcome }}\`"
             echo "- Test-result collection: \`${{ steps.collect_tests.outcome }}\`"
+            echo "- Validated cluster result: \`${{ steps.validate_tests.outcome }}\`"
             if test -f "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"; then
               echo
               cat "$RUNNER_TEMP/vpn-auth-diagnostics/summary.md"
