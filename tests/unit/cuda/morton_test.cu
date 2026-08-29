@@ -15,6 +15,7 @@
 #include <vector>
 
 #include "cuda_test.hpp"
+#include "globalbounding.hpp"
 #include "morton.hpp"
 
 namespace {
@@ -291,6 +292,72 @@ TEST_F(MortonKeysTest, MapsOppositeInputCornersConsistentlyWithPaddedBoundingBox
         (std::vector<ParticleIndex>{0u, 1u}));
 
     EXPECT_LT(actual.keys[0], actual.keys[1]);
+}
+
+TEST_F(
+    MortonKeysTest,
+    ReusingBoundingBoxProducesIdenticalMortonOrdering)
+{
+    const std::vector<double> x{
+         0.8,
+        -1.0,
+         0.1,
+         1.0,
+        -0.4};
+
+    const std::vector<double> y{
+        -0.2,
+         0.9,
+         0.0,
+        -1.0,
+         0.3};
+
+    const std::vector<double> z{
+         1.0,
+        -0.7,
+         0.2,
+         0.4,
+        -1.0};
+
+    const DeviceCoordinates coordinates(
+        x,
+        y,
+        z);
+
+    const Bbox boundingBox(
+        coordinates.x(),
+        coordinates.y(),
+        coordinates.z(),
+        coordinates.size());
+
+    const MortonKeys internallyComputed(
+        coordinates.x(),
+        coordinates.y(),
+        coordinates.z(),
+        coordinates.size());
+
+    const MortonKeys reusedBoundingBox(
+        coordinates.x(),
+        coordinates.y(),
+        coordinates.z(),
+        coordinates.size(),
+        boundingBox);
+
+    const MortonSnapshot internal =
+        copyMortonToHost(
+            internallyComputed);
+
+    const MortonSnapshot reused =
+        copyMortonToHost(
+            reusedBoundingBox);
+
+    EXPECT_EQ(
+        internal.keys,
+        reused.keys);
+
+    EXPECT_EQ(
+        internal.indices,
+        reused.indices);
 }
 
 TEST_F(MortonKeysTest, HandlesCoincidentParticlesDeterministically)

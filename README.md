@@ -81,8 +81,117 @@ Run a fixed number of shared leapfrog timesteps with:
 
 Use `./build/simulation/nbody --help` for the complete command-line help.
 The input must use the planar binary particle format documented below. The
-executable currently advances the particles in memory and reports timing and
-completion information; snapshot/checkpoint output is not implemented yet.
+executable advances particles in memory unless `--stream-dir` or `--cluster`
+enables graphical snapshots.
+
+## Headless cluster frame streaming
+
+The graphical output path consists of three pieces:
+
+- `nbody` samples completed particle states at a maximum of 60 wall-clock Hz
+  and atomically publishes position frames into a durable spool directory.
+- `nbody_stream_server` watches that directory and streams its ordered backlog
+  over TCP. It removes a frame only after the client acknowledges the exact
+  complete file.
+- `nbody_stream_client` saves each download with a `.part` suffix, atomically
+  renames it when complete, and then acknowledges it. Follow mode reconnects
+  after a network interruption.
+
+The sampler always writes the initial and final states. Between them it emits
+at most one frame every `1 / sample-rate` wall-clock seconds and only after a
+simulation step completes. It never delays the CUDA loop to manufacture 60
+frames when a step itself takes longer than 1/60 second. To keep large runs
+viewable, each frame contains an evenly spaced, deterministic sample of at most
+100,000 particle indices by default. Use `--stream-max-particles N` to change
+that limit or `--stream-max-particles 0` to send every particle.
+
+Streaming targets are built by default. A client-only build does not require
+CUDA:
+
+```bash
+cmake -S . -B build/client -G Ninja \
+  -DBUILD_TESTING=OFF \
+  -DNBODY_ENABLE_CUDA=OFF \
+  -DNBODY_BUILD_SIMULATION=OFF \
+  -DNBODY_BUILD_VIEWER=OFF \
+  -DNBODY_BUILD_STREAMING=ON
+cmake --build build/client --target nbody_stream_client --parallel
+```
+
+On the cluster, `--cluster` enables frames and starts the server that was built
+beside the simulator:
+
+```bash
+./build/simulation/nbody \
+  --input data/initial.bin \
+  --time-step 0.001 \
+  --steps 100000 \
+  --cluster \
+  --stream-dir "$SCRATCH/nbody-frames-$SLURM_JOB_ID" \
+  --sample-rate 60 \
+  --stream-max-particles 100000 \
+  --stream-bind 127.0.0.1 \
+  --stream-port 4747
+```
+
+The automatically started server exits with the simulator, but every
+unacknowledged `.nbsnap` file stays in the spool. To retrieve a backlog after
+the simulation has ended, start the server explicitly:
+
+```bash
+./build/simulation/nbody_stream_server \
+  --spool-dir "$SCRATCH/nbody-frames-$SLURM_JOB_ID" \
+  --bind 127.0.0.1 \
+  --port 4747
+```
+
+The default loopback binding deliberately exposes no unauthenticated cluster
+port. Forward it through SSH (using the login node as a jump host when the
+compute node requires one), then run the client locally:
+
+```bash
+ssh -N -L 4747:127.0.0.1:4747 user@compute-node
+
+./build/client/nbody_stream_client \
+  --host 127.0.0.1 \
+  --port 4747 \
+  --output-dir nbody-frames
+```
+
+The client follows new frames until interrupted. Add `--once` to download only
+the backlog present at connection time and exit. Direct remote access is also
+possible with `--stream-bind 0.0.0.0`, but it should be used only behind a
+cluster firewall because this initial transport intentionally relies on SSH
+for authentication and encryption.
+
+The equivalent convenience wrappers configure and build their application if
+needed, then launch it with the defaults above:
+
+```bash
+# On the cluster: serve the current job's persistent spool.
+./scripts/run-stream-server.sh
+
+# On the local computer: follow frames through the SSH tunnel.
+./scripts/run-stream-client.sh
+
+# Download the current backlog and exit.
+./scripts/run-stream-client.sh --once
+```
+
+Useful overrides include `NBODY_STREAM_HOST`, `NBODY_STREAM_PORT`,
+`NBODY_STREAM_SPOOL_DIR`, `NBODY_FRAME_OUTPUT_DIR`, and `NBODY_SKIP_BUILD=1`.
+The client defaults to `received-frames` in the project directory; the server
+defaults to `$SCRATCH/nbody-frames-$SLURM_JOB_ID` when those cluster variables
+are available.
+
+Each `.nbsnap` file is little-endian and contains a 72-byte header followed by
+interleaved float32 `x, y, z` values. The header contains the `NBSNAP01` magic,
+format version, sequence number, simulation step, simulated time, particle
+source/sample counts, scalar/component sizes, and payload byte count. Only
+positions are sent to keep graphical bandwidth at 12 bytes per sampled particle
+per frame; the simulator's full double-precision state is unchanged. Filenames
+include a unique run id, so an older offline backlog cannot be overwritten by a
+later simulation.
 
 ## Tests
 

@@ -31,6 +31,34 @@ unsigned int block_count(std::size_t n) {
     return static_cast<unsigned int>(required);
 }
 
+void validateMortonInput(
+    const double* x,
+    const double* y,
+    const double* z,
+    std::size_t count)
+{
+    if (count == 0)
+    {
+        throw std::invalid_argument(
+            "Cannot compute Morton keys for an empty particle set");
+    }
+
+    if (x == nullptr ||
+        y == nullptr ||
+        z == nullptr)
+    {
+        throw std::invalid_argument(
+            "Morton coordinate device pointers must not be null");
+    }
+
+    if (count >
+        std::numeric_limits<ParticleIndex>::max())
+    {
+        throw std::overflow_error(
+            "Particle count exceeds the Morton index representation");
+    }
+}
+
 class CudaStream {
 public:
     CudaStream() {
@@ -112,56 +140,88 @@ __global__ void interleave_bits(const QuantisedCoordinate* x, const QuantisedCoo
 
 } // namespace
 
-MortonKeys::MortonKeys(const double* x, const double* y, const double* z,
-                       std::size_t count) {
-    if (count == 0) {
-        throw std::invalid_argument(
-            "Cannot compute Morton keys for an empty particle set");
-    }
-    if (x == nullptr || y == nullptr || z == nullptr) {
-        throw std::invalid_argument(
-            "Morton coordinate device pointers must not be null");
-    }
-    if (count > std::numeric_limits<ParticleIndex>::max()) {
-        throw std::overflow_error(
-            "Particle count exceeds the Morton index representation");
-    }
+MortonKeys::MortonKeys(const double* x, const double* y, const double* z, std::size_t count)
+{
+    validateMortonInput(x, y, z, count);
 
+    const Bbox boundingBox(x, y, z, count);
+
+    build(x, y, z, count, boundingBox);
+}
+
+
+MortonKeys::MortonKeys(const double* x, const double* y, const double* z, std::size_t count, const Bbox& boundingBox)
+{
+    validateMortonInput(x, y, z, count);
+
+    build(x, y, z, count, boundingBox);
+}
+
+void MortonKeys::build(const double* x, const double* y, const double* z, std::size_t count, const Bbox& boundingBox)
+{
     keys_.resize(count);
     indices_.resize(count);
+
     thrust::sequence(indices_.begin(), indices_.end(), ParticleIndex{0});
 
-    Bbox box(x, y, z, count);
-    const double* box_values = box.device_data();
-    thrust::device_vector<double> out_x(count);
-    thrust::device_vector<double> out_y(count);
-    thrust::device_vector<double> out_z(count);
+    const BboxValues bounds = boundingBox.values();
+
+    if (!std::isfinite(bounds.center_x) || !std::isfinite(bounds.center_y) || !std::isfinite(bounds.center_z) || !std::isfinite(bounds.side) || bounds.side <= 0.0)
+        throw std::invalid_argument("Morton bounding box is not valid");
+
+    const double* boxValues = boundingBox.device_data();
+
+    thrust::device_vector<double> outX(count);
+    thrust::device_vector<double> outY(count);
+    thrust::device_vector<double> outZ(count);
 
     constexpr int bits = 10;
-    constexpr std::uint32_t grid_size = 1u << bits;
-    constexpr std::uint32_t max_q = grid_size - 1;
+    constexpr std::uint32_t gridSize = 1u << bits;
+    constexpr std::uint32_t maxQ = gridSize - 1;
 
-    thrust::device_vector<QuantisedCoordinate> q_x(count);
-    thrust::device_vector<QuantisedCoordinate> q_y(count);
-    thrust::device_vector<QuantisedCoordinate> q_z(count);
+    thrust::device_vector<QuantisedCoordinate> qX(count);
+    thrust::device_vector<QuantisedCoordinate> qY(count);
+    thrust::device_vector<QuantisedCoordinate> qZ(count);
 
-    normalise(x, y, z, box_values, box_values + 1, box_values + 2,
-              box_values + 3, thrust::raw_pointer_cast(out_x.data()),
-              thrust::raw_pointer_cast(out_y.data()),
-              thrust::raw_pointer_cast(out_z.data()), count);
-    quantise(thrust::raw_pointer_cast(out_x.data()),
-             thrust::raw_pointer_cast(out_y.data()),
-             thrust::raw_pointer_cast(out_z.data()),
-             thrust::raw_pointer_cast(q_x.data()),
-             thrust::raw_pointer_cast(q_y.data()),
-             thrust::raw_pointer_cast(q_z.data()), grid_size, max_q, count);
-    create_keys(thrust::raw_pointer_cast(q_x.data()),
-                thrust::raw_pointer_cast(q_y.data()),
-                thrust::raw_pointer_cast(q_z.data()), count);
+    normalise(x, y, z, boxValues, boxValues + 1, boxValues + 2, boxValues + 3, 
+        thrust::raw_pointer_cast(
+            outX.data()),
+        thrust::raw_pointer_cast(
+            outY.data()),
+        thrust::raw_pointer_cast(
+            outZ.data()),
+        count);
 
-    // Keep each original particle index paired with its key. Stability makes
-    // equal-key ordering deterministic and matches radix-sort semantics.
-    thrust::stable_sort_by_key(keys_.begin(), keys_.end(), indices_.begin());
+    quantise(
+        thrust::raw_pointer_cast(
+            outX.data()),
+        thrust::raw_pointer_cast(
+            outY.data()),
+        thrust::raw_pointer_cast(
+            outZ.data()),
+        thrust::raw_pointer_cast(
+            qX.data()),
+        thrust::raw_pointer_cast(
+            qY.data()),
+        thrust::raw_pointer_cast(
+            qZ.data()),
+        gridSize,
+        maxQ,
+        count);
+
+    create_keys(
+        thrust::raw_pointer_cast(
+            qX.data()),
+        thrust::raw_pointer_cast(
+            qY.data()),
+        thrust::raw_pointer_cast(
+            qZ.data()),
+        count);
+
+    thrust::stable_sort_by_key(
+        keys_.begin(),
+        keys_.end(),
+        indices_.begin());
 }
 
 void MortonKeys::normalise(const double* x, const double* y, const double* z,

@@ -872,8 +872,11 @@ void runCase(
 
             ++occupiedLeaves;
 
-            EXPECT_EQ(host.level[node], kOctreeMaxLevel)
-                << name + ": occupied leaf is not at level 10";
+            EXPECT_GT(host.level[node], 0)
+                << name + ": occupied leaf cannot be the explicit root";
+
+            EXPECT_LE(host.level[node], kOctreeMaxLevel)
+                << name + ": occupied leaf exceeds maximum octree depth";
 
             bool matched = false;
 
@@ -882,7 +885,9 @@ void runCase(
                  ++group)
             {
                 if (host.prefix[node] !=
-                    uniqueKeys[group])
+                    prefixAtLevel(
+                        uniqueKeys[group],
+                        host.level[node]))
                 {
                     continue;
                 }

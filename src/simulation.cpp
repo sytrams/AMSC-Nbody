@@ -138,11 +138,9 @@ void Simulation::rebuildSpatialStructure() {
   const DeviceParticlesView particleView = particles_.device_view();
   const int particleCount = checkedParticleCount(particleView.count);
 
-  const Bbox boundingBox(particleView.x, particleView.y, particleView.z,
-                         particleView.count);
+  const Bbox boundingBox(particleView.x, particleView.y, particleView.z, particleView.count);
 
-  auto stagedMorton = std::make_unique<MortonKeys>(
-      particleView.x, particleView.y, particleView.z, particleView.count);
+  auto stagedMorton = std::make_unique<MortonKeys>(particleView.x, particleView.y, particleView.z, particleView.count, boundingBox);
 
   StagedSpatialResources staged;
 

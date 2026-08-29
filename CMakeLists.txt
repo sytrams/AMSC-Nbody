@@ -68,6 +68,7 @@ set(CMAKE_CXX_SCAN_FOR_MODULES OFF)
 option(NBODY_ENABLE_CUDA "Build CUDA code and tests" OFF)
 option(NBODY_BUILD_SIMULATION "Build the CUDA simulation executable" OFF)
 option(NBODY_BUILD_VIEWER "Build the macOS Metal viewer" ON)
+option(NBODY_BUILD_STREAMING "Build the frame streaming server and client" ON)
 option(
     NBODY_ENABLE_COMPUTE_SANITIZER_TESTS
     "Register Compute Sanitizer memcheck tests"
@@ -77,6 +78,57 @@ if(NBODY_BUILD_SIMULATION AND NOT NBODY_ENABLE_CUDA)
     message(
         FATAL_ERROR
         "NBODY_BUILD_SIMULATION=ON requires NBODY_ENABLE_CUDA=ON")
+endif()
+
+if(NBODY_BUILD_SIMULATION AND NOT NBODY_BUILD_STREAMING)
+    message(
+        FATAL_ERROR
+        "NBODY_BUILD_SIMULATION=ON requires NBODY_BUILD_STREAMING=ON")
+endif()
+
+# Snapshot files and their transport are ordinary portable host code. Keeping
+# this library independent of CUDA lets a laptop build only the download client
+# while the cluster build links the same format implementation into nbody.
+if(NBODY_BUILD_STREAMING)
+    if(NOT UNIX)
+        message(FATAL_ERROR "N-body streaming currently requires POSIX sockets")
+    endif()
+
+    add_library(
+        nbody_streaming
+        STATIC
+        src/streaming/frame.cpp
+        src/streaming/network.cpp
+        src/streaming/server_process.cpp)
+    add_library(nbody::streaming ALIAS nbody_streaming)
+    target_include_directories(
+        nbody_streaming
+        PUBLIC ${PROJECT_SOURCE_DIR}/src)
+    target_compile_features(nbody_streaming PUBLIC cxx_std_17)
+    target_compile_options(
+        nbody_streaming
+        PRIVATE -Wall -Wextra -Wpedantic)
+    set_target_properties(
+        nbody_streaming
+        PROPERTIES
+            CXX_SCAN_FOR_MODULES OFF
+            POSITION_INDEPENDENT_CODE ON)
+
+    add_executable(nbody_stream_server apps/stream_server/main.cpp)
+    target_link_libraries(nbody_stream_server PRIVATE nbody::streaming)
+    target_compile_options(
+        nbody_stream_server
+        PRIVATE -Wall -Wextra -Wpedantic)
+    set_target_properties(
+        nbody_stream_server PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+
+    add_executable(nbody_stream_client apps/stream_client/main.cpp)
+    target_link_libraries(nbody_stream_client PRIVATE nbody::streaming)
+    target_compile_options(
+        nbody_stream_client
+        PRIVATE -Wall -Wextra -Wpedantic)
+    set_target_properties(
+        nbody_stream_client PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 endif()
 
 # The particle loader is header-only. nbody::particle gives consumers a stable,
@@ -225,13 +277,17 @@ if(NBODY_ENABLE_CUDA)
             POSITION_INDEPENDENT_CODE ON)
 
     if(NBODY_BUILD_SIMULATION)
-        add_executable(nbody apps/simulation/main.cpp)
+        add_executable(
+            nbody
+            apps/simulation/main.cpp
+            src/streaming/device_capture.cu)
         # Particles owns Thrust device vectors, so compile the translation unit
         # with nvcc just like the host-side Simulation orchestration source.
         set_source_files_properties(
             apps/simulation/main.cpp
             PROPERTIES LANGUAGE CUDA)
-        target_link_libraries(nbody PRIVATE nbody::cuda)
+        target_link_libraries(nbody PRIVATE nbody::cuda nbody::streaming)
+        add_dependencies(nbody nbody_stream_server)
         target_compile_options(
             nbody
             PRIVATE

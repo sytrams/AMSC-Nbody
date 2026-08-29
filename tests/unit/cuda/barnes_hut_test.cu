@@ -761,4 +761,238 @@ TEST_F(
         1.0e-6);
 }
 
+TEST_F(
+    BarnesHutTest,
+    OpensOffCenterClusterWhenImprovedCriterionRejectsIt)
+{
+    allocateTree(5);
+
+    octree.nParticles = 3;
+    octree.nLeaves = 3;
+
+    std::vector<int> children(5 * 8, -1);
+
+    children[0 * 8 + 0] = 1;
+    children[0 * 8 + 7] = 2;
+
+    children[2 * 8 + 0] = 3;
+    children[2 * 8 + 7] = 4;
+
+    copyToDevice(
+        octree.children,
+        children);
+
+    copyToDevice(
+        octree.firstParticle,
+        std::vector<int>{
+            -1,
+             0,
+            -1,
+             1,
+             2});
+
+    copyToDevice(
+        octree.particleCount,
+        std::vector<int>{
+            0,
+            1,
+            0,
+            1,
+            1});
+
+    const std::vector<double> hostMass{
+        1.0,
+        2.0,
+        3.0};
+
+    const std::vector<double> hostX{
+        -10.0,
+         10.0,
+         12.0};
+
+    const std::vector<double> hostY{
+        0.0,
+        0.0,
+        0.0};
+
+    const std::vector<double> hostZ{
+        0.0,
+        0.0,
+        0.0};
+
+    copyToDevice(
+        octree.mass,
+        std::vector<double>{
+            6.0,
+            1.0,
+            5.0,
+            2.0,
+            3.0});
+
+    copyToDevice(
+        octree.comX,
+        std::vector<double>{
+            46.0 / 6.0,
+            -10.0,
+             11.2,
+             10.0,
+             12.0});
+
+    copyToDevice(
+        octree.comY,
+        std::vector<double>(
+            5,
+            0.0));
+
+    copyToDevice(
+        octree.comZ,
+        std::vector<double>(
+            5,
+            0.0));
+
+    /*
+     * Node 2 is geometrically centered at x = 8,
+     * but its center of mass is x = 11.2.
+     *
+     * Therefore:
+     *
+     *     delta = |11.2 - 8| = 3.2
+     */
+    copyToDevice(
+        octree.centerX,
+        std::vector<double>{
+             0.0,
+            -8.0,
+             8.0,
+            10.0,
+            12.0});
+
+    copyToDevice(
+        octree.centerY,
+        std::vector<double>(
+            5,
+            0.0));
+
+    copyToDevice(
+        octree.centerZ,
+        std::vector<double>(
+            5,
+            0.0));
+
+    copyToDevice(
+        octree.halfSize,
+        std::vector<double>{
+            16.0,
+             8.0,
+             8.0,
+             1.0,
+             1.0});
+
+    thrust::device_vector<std::uint32_t>
+        sortedIndices{
+            0u,
+            1u,
+            2u};
+
+    thrust::device_vector<double>
+        mass(
+            hostMass.begin(),
+            hostMass.end());
+
+    thrust::device_vector<double>
+        x(
+            hostX.begin(),
+            hostX.end());
+
+    thrust::device_vector<double>
+        y(
+            hostY.begin(),
+            hostY.end());
+
+    thrust::device_vector<double>
+        z(
+            hostZ.begin(),
+            hostZ.end());
+
+    thrust::device_vector<double> ax(3);
+    thrust::device_vector<double> ay(3);
+    thrust::device_vector<double> az(3);
+
+    BarnesHutParameters parameters;
+
+    /*
+     * For target p0 and node 2:
+     *
+     * side  = 16
+     * d     = 21.2
+     * delta = 3.2
+     *
+     * Old criterion:
+     *
+     *     side / d = 16 / 21.2
+     *              ~= 0.755
+     *
+     * therefore with theta = 0.85:
+     *
+     *     0.755 < 0.85
+     *
+     * and the old MAC ACCEPTS node 2.
+     *
+     * Improved criterion:
+     *
+     *     d > side / theta + delta
+     *
+     *     21.2 > 16 / 0.85 + 3.2
+     *
+     *     21.2 > 22.0235...
+     *
+     * which is FALSE.
+     *
+     * Therefore node 2 must be opened.
+     */
+    parameters.theta = 0.85;
+    parameters.softening = 0.0;
+    parameters.gravitationalConstant = 1.0;
+
+    computeBarnesHutAcceleration(
+        octree,
+        thrust::raw_pointer_cast(
+            sortedIndices.data()),
+        thrust::raw_pointer_cast(
+            mass.data()),
+        thrust::raw_pointer_cast(
+            x.data()),
+        thrust::raw_pointer_cast(
+            y.data()),
+        thrust::raw_pointer_cast(
+            z.data()),
+        thrust::raw_pointer_cast(
+            ax.data()),
+        thrust::raw_pointer_cast(
+            ay.data()),
+        thrust::raw_pointer_cast(
+            az.data()),
+        3,
+        parameters);
+
+    const auto actualX =
+        copyFromDevice(
+            thrust::raw_pointer_cast(
+                ax.data()),
+            3);
+
+    /*
+     * Since node 2 must be opened, p0 must interact
+     * exactly with particles 1 and 2.
+     */
+    const double expectedExact =
+        2.0 / (20.0 * 20.0) +
+        3.0 / (22.0 * 22.0);
+
+    EXPECT_NEAR(
+        actualX[0],
+        expectedExact,
+        1.0e-12);
+}
+
 } // namespace

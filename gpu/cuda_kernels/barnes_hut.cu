@@ -116,8 +116,6 @@ __global__ void computeBarnesHutAccelerationKernel(Octree octree, const std::uin
 
     stack[stackSize++] = octree.root;
 
-    const double thetaSquared = theta * theta;
-
     while (stackSize > 0)
     {
         const int node = stack[--stackSize];
@@ -188,10 +186,23 @@ __global__ void computeBarnesHutAccelerationKernel(Octree octree, const std::uin
         const double dz = octree.comZ[node] - targetZ;
         const double distanceSquared = dx * dx + dy * dy + dz * dz;
         const double side = 2.0 * halfSize;
+
         const bool containsTarget = nodeContainsTarget(octree, node, targetX, targetY, targetZ);
 
-        // Barnes-Hut Multipole Acceptance Criterion
-        const bool acceptNode = !containsTarget && distanceSquared > 0.0 && side * side < thetaSquared * distanceSquared;
+        bool acceptNode = false;
+
+        if (!containsTarget && distanceSquared > 0.0 && theta > 0.0)
+        {
+            const double centerToComX = octree.comX[node] - octree.centerX[node];
+            const double centerToComY = octree.comY[node] - octree.centerY[node];
+            const double centerToComZ = octree.comZ[node] - octree.centerZ[node];
+            const double centerToComSquared = centerToComX * centerToComX + centerToComY * centerToComY + centerToComZ * centerToComZ;
+            const double distance = sqrt(distanceSquared);
+            const double centerToComDistance = sqrt(centerToComSquared);
+            const double criticalDistance = side / theta + centerToComDistance;
+
+            acceptNode = distance > criticalDistance;
+        }
 
         if (acceptNode)
         {
