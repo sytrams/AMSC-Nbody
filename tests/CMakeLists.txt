@@ -174,6 +174,7 @@ if(TARGET nbody::cuda)
         nbody_cuda_unit_tests
         unit
         unit/cuda/barnes_hut_test.cu
+        unit/cuda/device_buffer_test.cu
         unit/cuda/globalbounding_test.cu
         unit/cuda/integrator_test.cu
         unit/cuda/morton_test.cu

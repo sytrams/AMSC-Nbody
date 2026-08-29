@@ -289,7 +289,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 actualUniqueKeys.data(),
-                groups.uniqueKeys,
+                groups.uniqueKeys.data(),
                 static_cast<std::size_t>(nLeaves) *
                     sizeof(std::uint32_t),
                 cudaMemcpyDeviceToHost),
@@ -298,7 +298,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 actualFirstParticle.data(),
-                groups.firstParticle,
+                groups.firstParticle.data(),
                 static_cast<std::size_t>(nLeaves) *
                     sizeof(int),
                 cudaMemcpyDeviceToHost),
@@ -307,7 +307,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 actualParticleCount.data(),
-                groups.particleCount,
+                groups.particleCount.data(),
                 static_cast<std::size_t>(nLeaves) *
                     sizeof(int),
                 cudaMemcpyDeviceToHost),

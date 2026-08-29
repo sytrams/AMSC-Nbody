@@ -385,13 +385,13 @@ void buildTreeFromMortonGroups(Tree& tree, const MortonLeafGroups& groups)
     if (groups.nGroups > groups.nParticles || groups.nParticles > groups.capacity)
         throw std::logic_error("MortonLeafGroups metadata is inconsistent");
 
-    if (groups.uniqueKeys == nullptr)
+    if (groups.uniqueKeys.data() == nullptr)
         throw std::logic_error("MortonLeafGroups uniqueKeys is not allocated");
 
     if (tree.nLeaves != groups.nGroups)
         throw std::invalid_argument("Tree leaf count does not match Morton group count");
 
-    buildTree(tree, groups.uniqueKeys, groups.nGroups);
+    buildTree(tree, groups.uniqueKeys.data(), groups.nGroups);
 }
 
 void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ, int N)
@@ -465,7 +465,7 @@ void computeGroupedCenterOfMass(Tree& tree, const MortonLeafGroups& groups, cons
     if (tree.nLeaves != groups.nGroups)
         throw std::invalid_argument("Tree leaf count does not match Morton group count");
 
-    if (groups.firstParticle == nullptr || groups.particleCount == nullptr)
+    if (groups.firstParticle.data() == nullptr || groups.particleCount.data() == nullptr)
         throw std::logic_error("MortonLeafGroups arrays are not allocated");
 
     if (d_sortedIndices == nullptr)
@@ -486,7 +486,7 @@ void computeGroupedCenterOfMass(Tree& tree, const MortonLeafGroups& groups, cons
 
     const int blocks = (nGroups + threadsPerBlock - 1) / threadsPerBlock;
 
-    initializeGroupedLeavesKernel<<<blocks, threadsPerBlock>>>(tree, groups.firstParticle, groups.particleCount, nGroups, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ);
+    initializeGroupedLeavesKernel<<<blocks, threadsPerBlock>>>(tree, groups.firstParticle.data(), groups.particleCount.data(), nGroups, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ);
 
     cudaError_t error = cudaGetLastError();
 

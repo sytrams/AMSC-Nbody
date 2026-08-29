@@ -5,6 +5,7 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "cuda_test.hpp"
@@ -12,6 +13,22 @@
 
 namespace 
 {
+    static_assert(
+        !std::is_copy_constructible_v<
+            MortonLeafGroups>);
+
+    static_assert(
+        !std::is_copy_assignable_v<
+            MortonLeafGroups>);
+
+    static_assert(
+        std::is_move_constructible_v<
+            MortonLeafGroups>);
+
+    static_assert(
+        std::is_move_assignable_v<
+            MortonLeafGroups>);
+
     void checkCuda(
         cudaError_t error,
         const char* operation)
@@ -107,7 +124,7 @@ namespace
         {
             const std::size_t inputBytes =
                 sortedKeys.size() * sizeof(std::uint32_t);
-
+            
             checkCuda(
                 cudaMalloc(
                     reinterpret_cast<void**>(&d_sortedKeys),
@@ -160,7 +177,7 @@ namespace
             checkCuda(
                 cudaMemcpy(
                     actualUniqueKeys.data(),
-                    groups.uniqueKeys,
+                    groups.uniqueKeys.data(),
                     keyBytes,
                     cudaMemcpyDeviceToHost),
                 "copy unique keys to host");
@@ -168,7 +185,7 @@ namespace
             checkCuda(
                 cudaMemcpy(
                     actualFirstParticle.data(),
-                    groups.firstParticle,
+                    groups.firstParticle.data(),
                     integerBytes,
                     cudaMemcpyDeviceToHost),
                 "copy group offsets to host");
@@ -176,7 +193,7 @@ namespace
             checkCuda(
                 cudaMemcpy(
                     actualParticleCount.data(),
-                    groups.particleCount,
+                    groups.particleCount.data(),
                     integerBytes,
                     cudaMemcpyDeviceToHost),
                 "copy group counts to host");

@@ -77,7 +77,7 @@ __device__ int octantAtLevel(std::uint32_t key, int level)
     return static_cast<int>((key >> shift) & 0x7u);
 }
 
-__device__ bool representativeKeyForRadixNode(const Tree& radixTree, const MortonLeafGroups& groups, int radixNode, std::uint32_t& key)
+__device__ bool representativeKeyForRadixNode(const Tree& radixTree, const MortonLeafGroupsView& groups, int radixNode, std::uint32_t& key)
 {
     if (radixNode < radixTree.nLeaves)
     {
@@ -96,7 +96,7 @@ __device__ bool representativeKeyForRadixNode(const Tree& radixTree, const Morto
     return true;
 }
 
-__global__ void materializeSparseOctreeKernel(Octree octree, Tree radixTree, MortonLeafGroups groups, RadixToOctreePlan plan, int* errorCode)
+__global__ void materializeSparseOctreeKernel(Octree octree, Tree radixTree, MortonLeafGroupsView groups, RadixToOctreePlan plan, int* errorCode)
 {
     const int radixNode = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -271,7 +271,7 @@ void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const Mort
     if (groups.nGroups !=radixTree.nLeaves)
         throw std::invalid_argument("Morton groups and radix tree have different leaf counts");
 
-    if (groups.uniqueKeys == nullptr || groups.firstParticle == nullptr || groups.particleCount == nullptr)
+    if (groups.uniqueKeys.data() == nullptr || groups.firstParticle.data() == nullptr || groups.particleCount.data() == nullptr)
         throw std::logic_error("Morton group arrays are not allocated");
 
     const int expectedRadixNodes = 2 * radixTree.nLeaves - 1;
@@ -342,7 +342,9 @@ void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const Mort
         constexpr int threadsPerBlock = 256;
         const int blocks = (plan.nRadixNodes + threadsPerBlock - 1) / threadsPerBlock;
 
-        materializeSparseOctreeKernel<<<blocks, threadsPerBlock>>>(octree, radixTree, groups, plan, errorCodeDevice);
+        const MortonLeafGroupsView groupsView = groups.view();
+
+        materializeSparseOctreeKernel<<<blocks, threadsPerBlock>>>(octree, radixTree, groupsView, plan, errorCodeDevice);
 
         checkCuda(cudaGetLastError(), "materializeSparseOctreeKernel launch");
         checkCuda(cudaDeviceSynchronize(), "materializeSparseOctreeKernel execution");
