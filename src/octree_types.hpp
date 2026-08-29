@@ -1,35 +1,117 @@
 #pragma once
 
 #include <cstdint>
+#include <type_traits>
 
-struct Octree
-{
-    int nParticles = 0;
-    int nLeaves = 0;
-    int nNodes = 0;
-    int root = -1;
+#include <thrust/device_vector.h>
 
-    //Layout node-major: children[node * 8 + octant]
-    int* children = nullptr;
-    int* parent = nullptr;
-    int* level = nullptr;
-    std::uint32_t* prefix = nullptr;
+#include "device_vector_utils.hpp"
 
-    int* firstParticle = nullptr;
-    int* particleCount = nullptr;
+// Trivially-copyable, non-owning kernel argument. Octree owns every allocation.
+template <typename Int, typename Uint, typename Double>
+struct BasicOctreeDeviceView {
+  int nParticles = 0;
+  int nLeaves = 0;
+  int nNodes = 0;
+  int root = -1;
 
-    double* mass = nullptr;
-    double* comX = nullptr;
-    double* comY = nullptr;
-    double* comZ = nullptr;
+  Int *children = nullptr;
+  Int *parent = nullptr;
+  Int *level = nullptr;
+  Uint *prefix = nullptr;
+  Int *firstParticle = nullptr;
+  Int *particleCount = nullptr;
+  Double *mass = nullptr;
+  Double *comX = nullptr;
+  Double *comY = nullptr;
+  Double *comZ = nullptr;
+  Double *centerX = nullptr;
+  Double *centerY = nullptr;
+  Double *centerZ = nullptr;
+  Double *halfSize = nullptr;
+  Int *pendingChildren = nullptr;
+  Int *childCount = nullptr;
+};
 
-    //Geometria della cella
-    double* centerX = nullptr;
-    double* centerY = nullptr;
-    double* centerZ = nullptr;
-    double* halfSize = nullptr;
+using OctreeDeviceView = BasicOctreeDeviceView<int, std::uint32_t, double>;
+using ConstOctreeDeviceView =
+    BasicOctreeDeviceView<const int, const std::uint32_t, const double>;
+static_assert(std::is_trivially_copyable_v<OctreeDeviceView>);
+static_assert(std::is_trivially_copyable_v<ConstOctreeDeviceView>);
 
-    //Bottom-up synchronization
-    int* pendingChildren = nullptr;
-    int* childCount = nullptr;
+struct Octree {
+  int nParticles = 0;
+  int nLeaves = 0;
+  int nNodes = 0;
+  int root = -1;
+
+  // Layout node-major: children[node * 8 + octant]
+  thrust::device_vector<int> children;
+  thrust::device_vector<int> parent;
+  thrust::device_vector<int> level;
+  thrust::device_vector<std::uint32_t> prefix;
+
+  thrust::device_vector<int> firstParticle;
+  thrust::device_vector<int> particleCount;
+
+  thrust::device_vector<double> mass;
+  thrust::device_vector<double> comX;
+  thrust::device_vector<double> comY;
+  thrust::device_vector<double> comZ;
+
+  // Geometria della cella
+  thrust::device_vector<double> centerX;
+  thrust::device_vector<double> centerY;
+  thrust::device_vector<double> centerZ;
+  thrust::device_vector<double> halfSize;
+
+  // Bottom-up synchronization
+  thrust::device_vector<int> pendingChildren;
+  thrust::device_vector<int> childCount;
+
+  [[nodiscard]] OctreeDeviceView device_view() noexcept {
+    return {nParticles,
+            nLeaves,
+            nNodes,
+            root,
+            nbody::deviceData(children),
+            nbody::deviceData(parent),
+            nbody::deviceData(level),
+            nbody::deviceData(prefix),
+            nbody::deviceData(firstParticle),
+            nbody::deviceData(particleCount),
+            nbody::deviceData(mass),
+            nbody::deviceData(comX),
+            nbody::deviceData(comY),
+            nbody::deviceData(comZ),
+            nbody::deviceData(centerX),
+            nbody::deviceData(centerY),
+            nbody::deviceData(centerZ),
+            nbody::deviceData(halfSize),
+            nbody::deviceData(pendingChildren),
+            nbody::deviceData(childCount)};
+  }
+
+  [[nodiscard]] ConstOctreeDeviceView device_view() const noexcept {
+    return {nParticles,
+            nLeaves,
+            nNodes,
+            root,
+            nbody::deviceData(children),
+            nbody::deviceData(parent),
+            nbody::deviceData(level),
+            nbody::deviceData(prefix),
+            nbody::deviceData(firstParticle),
+            nbody::deviceData(particleCount),
+            nbody::deviceData(mass),
+            nbody::deviceData(comX),
+            nbody::deviceData(comY),
+            nbody::deviceData(comZ),
+            nbody::deviceData(centerX),
+            nbody::deviceData(centerY),
+            nbody::deviceData(centerZ),
+            nbody::deviceData(halfSize),
+            nbody::deviceData(pendingChildren),
+            nbody::deviceData(childCount)};
+  }
 };

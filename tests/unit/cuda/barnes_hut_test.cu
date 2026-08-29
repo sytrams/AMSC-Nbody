@@ -174,47 +174,47 @@ TEST_F(
     octree.nLeaves = 1;
 
     copyToDevice(
-        octree.children,
+        nbody::deviceData(octree.children),
         std::vector<int>(8, -1));
 
     copyToDevice(
-        octree.firstParticle,
+        nbody::deviceData(octree.firstParticle),
         std::vector<int>{0});
 
     copyToDevice(
-        octree.particleCount,
+        nbody::deviceData(octree.particleCount),
         std::vector<int>{1});
 
     copyToDevice(
-        octree.mass,
+        nbody::deviceData(octree.mass),
         std::vector<double>{2.0});
 
     copyToDevice(
-        octree.comX,
+        nbody::deviceData(octree.comX),
         std::vector<double>{3.0});
 
     copyToDevice(
-        octree.comY,
+        nbody::deviceData(octree.comY),
         std::vector<double>{4.0});
 
     copyToDevice(
-        octree.comZ,
+        nbody::deviceData(octree.comZ),
         std::vector<double>{5.0});
 
     copyToDevice(
-        octree.centerX,
+        nbody::deviceData(octree.centerX),
         std::vector<double>{3.0});
 
     copyToDevice(
-        octree.centerY,
+        nbody::deviceData(octree.centerY),
         std::vector<double>{4.0});
 
     copyToDevice(
-        octree.centerZ,
+        nbody::deviceData(octree.centerZ),
         std::vector<double>{5.0});
 
     copyToDevice(
-        octree.halfSize,
+        nbody::deviceData(octree.halfSize),
         std::vector<double>{1.0});
 
     thrust::device_vector<std::uint32_t>
@@ -323,11 +323,11 @@ TEST_F(
     children[2 * 8 + 7] = 4;
 
     copyToDevice(
-        octree.children,
+        nbody::deviceData(octree.children),
         children);
 
     copyToDevice(
-        octree.firstParticle,
+        nbody::deviceData(octree.firstParticle),
         std::vector<int>{
             -1,
              0,
@@ -336,7 +336,7 @@ TEST_F(
              2});
 
     copyToDevice(
-        octree.particleCount,
+        nbody::deviceData(octree.particleCount),
         std::vector<int>{
             0,
             1,
@@ -375,7 +375,7 @@ TEST_F(
     // Node masses.
     //
     copyToDevice(
-        octree.mass,
+        nbody::deviceData(octree.mass),
         std::vector<double>{
             6.0,
             1.0,
@@ -387,7 +387,7 @@ TEST_F(
     // Center of mass.
     //
     copyToDevice(
-        octree.comX,
+        nbody::deviceData(octree.comX),
         std::vector<double>{
             46.0 / 6.0,
             -10.0,
@@ -396,13 +396,13 @@ TEST_F(
              12.0});
 
     copyToDevice(
-        octree.comY,
+        nbody::deviceData(octree.comY),
         std::vector<double>(
             5,
             0.0));
 
     copyToDevice(
-        octree.comZ,
+        nbody::deviceData(octree.comZ),
         std::vector<double>(
             5,
             0.0));
@@ -411,7 +411,7 @@ TEST_F(
     // Cell geometry.
     //
     copyToDevice(
-        octree.centerX,
+        nbody::deviceData(octree.centerX),
         std::vector<double>{
              0.0,
             -8.0,
@@ -420,19 +420,19 @@ TEST_F(
             12.0});
 
     copyToDevice(
-        octree.centerY,
+        nbody::deviceData(octree.centerY),
         std::vector<double>(
             5,
             0.0));
 
     copyToDevice(
-        octree.centerZ,
+        nbody::deviceData(octree.centerZ),
         std::vector<double>(
             5,
             0.0));
 
     copyToDevice(
-        octree.halfSize,
+        nbody::deviceData(octree.halfSize),
         std::vector<double>{
             16.0,
              8.0,
@@ -573,11 +573,11 @@ TEST_F(
     children[2 * 8 + 7] = 4;
 
     copyToDevice(
-        octree.children,
+        nbody::deviceData(octree.children),
         children);
 
     copyToDevice(
-        octree.firstParticle,
+        nbody::deviceData(octree.firstParticle),
         std::vector<int>{
             -1,
              0,
@@ -586,7 +586,7 @@ TEST_F(
              2});
 
     copyToDevice(
-        octree.particleCount,
+        nbody::deviceData(octree.particleCount),
         std::vector<int>{
             0,
             1,
@@ -605,7 +605,7 @@ TEST_F(
          12.0};
 
     copyToDevice(
-        octree.mass,
+        nbody::deviceData(octree.mass),
         std::vector<double>{
             6.0,
             1.0,
@@ -614,7 +614,7 @@ TEST_F(
             3.0});
 
     copyToDevice(
-        octree.comX,
+        nbody::deviceData(octree.comX),
         std::vector<double>{
             46.0 / 6.0,
             -10.0,
@@ -623,15 +623,15 @@ TEST_F(
              12.0});
 
     copyToDevice(
-        octree.comY,
+        nbody::deviceData(octree.comY),
         std::vector<double>(5, 0.0));
 
     copyToDevice(
-        octree.comZ,
+        nbody::deviceData(octree.comZ),
         std::vector<double>(5, 0.0));
 
     copyToDevice(
-        octree.centerX,
+        nbody::deviceData(octree.centerX),
         std::vector<double>{
              0.0,
             -8.0,
@@ -640,15 +640,15 @@ TEST_F(
             12.0});
 
     copyToDevice(
-        octree.centerY,
+        nbody::deviceData(octree.centerY),
         std::vector<double>(5, 0.0));
 
     copyToDevice(
-        octree.centerZ,
+        nbody::deviceData(octree.centerZ),
         std::vector<double>(5, 0.0));
 
     copyToDevice(
-        octree.halfSize,
+        nbody::deviceData(octree.halfSize),
         std::vector<double>{
             16.0,
              8.0,
@@ -779,11 +779,11 @@ TEST_F(
     children[2 * 8 + 7] = 4;
 
     copyToDevice(
-        octree.children,
+        nbody::deviceData(octree.children),
         children);
 
     copyToDevice(
-        octree.firstParticle,
+        nbody::deviceData(octree.firstParticle),
         std::vector<int>{
             -1,
              0,
@@ -792,7 +792,7 @@ TEST_F(
              2});
 
     copyToDevice(
-        octree.particleCount,
+        nbody::deviceData(octree.particleCount),
         std::vector<int>{
             0,
             1,
@@ -821,7 +821,7 @@ TEST_F(
         0.0};
 
     copyToDevice(
-        octree.mass,
+        nbody::deviceData(octree.mass),
         std::vector<double>{
             6.0,
             1.0,
@@ -830,7 +830,7 @@ TEST_F(
             3.0});
 
     copyToDevice(
-        octree.comX,
+        nbody::deviceData(octree.comX),
         std::vector<double>{
             46.0 / 6.0,
             -10.0,
@@ -839,13 +839,13 @@ TEST_F(
              12.0});
 
     copyToDevice(
-        octree.comY,
+        nbody::deviceData(octree.comY),
         std::vector<double>(
             5,
             0.0));
 
     copyToDevice(
-        octree.comZ,
+        nbody::deviceData(octree.comZ),
         std::vector<double>(
             5,
             0.0));
@@ -859,7 +859,7 @@ TEST_F(
      *     delta = |11.2 - 8| = 3.2
      */
     copyToDevice(
-        octree.centerX,
+        nbody::deviceData(octree.centerX),
         std::vector<double>{
              0.0,
             -8.0,
@@ -868,19 +868,19 @@ TEST_F(
             12.0});
 
     copyToDevice(
-        octree.centerY,
+        nbody::deviceData(octree.centerY),
         std::vector<double>(
             5,
             0.0));
 
     copyToDevice(
-        octree.centerZ,
+        nbody::deviceData(octree.centerZ),
         std::vector<double>(
             5,
             0.0));
 
     copyToDevice(
-        octree.halfSize,
+        nbody::deviceData(octree.halfSize),
         std::vector<double>{
             16.0,
              8.0,

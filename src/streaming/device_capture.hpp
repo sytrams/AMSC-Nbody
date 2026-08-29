@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <filesystem>
 
+#include <thrust/device_vector.h>
+
 #include "particle.hpp"
 #include "streaming/frame.hpp"
 
@@ -20,15 +22,14 @@ public:
   [[nodiscard]] std::size_t sourceParticleCount() const noexcept;
   [[nodiscard]] std::size_t sampleParticleCount() const noexcept;
 
-  std::filesystem::path write(const FrameSpool &spool,
-                              std::uint64_t sequence,
+  std::filesystem::path write(const FrameSpool &spool, std::uint64_t sequence,
                               std::uint64_t simulationStep,
                               double simulationTime) const;
 
 private:
   ConstDeviceParticlesView particles_{};
   std::size_t sampleParticleCount_ = 0;
-  float *devicePositions_ = nullptr;
+  mutable thrust::device_vector<float> devicePositions_;
 };
 
 } // namespace nbody::streaming

@@ -6,6 +6,8 @@
 #include <stdexcept>
 #include <string>
 
+#include <thrust/device_vector.h>
+
 #include "barnes_hut.hpp"
 #include "radix_to_octree.hpp"
 
@@ -90,7 +92,7 @@ __device__ bool accumulatePointMassAcceleration(double targetX, double targetY, 
 }
 
 
-__device__ bool nodeContainsTarget(const Octree& octree, int node, double targetX, double targetY, double targetZ)
+__device__ bool nodeContainsTarget(const ConstOctreeDeviceView& octree, int node, double targetX, double targetY, double targetZ)
 {
     const double halfSize = octree.halfSize[node];
 
@@ -98,7 +100,7 @@ __device__ bool nodeContainsTarget(const Octree& octree, int node, double target
 }
 
 
-__global__ void computeBarnesHutAccelerationKernel(Octree octree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, double* accelerationX, double* accelerationY, double* accelerationZ, double theta, double softeningSquared, double gravitationalConstant, int* errorCode)
+__global__ void computeBarnesHutAccelerationKernel(ConstOctreeDeviceView octree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, double* accelerationX, double* accelerationY, double* accelerationZ, double theta, double softeningSquared, double gravitationalConstant, int* errorCode)
 {
     const int target = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -265,15 +267,15 @@ void computeBarnesHutAcceleration(const Octree& octree, const std::uint32_t* d_s
         throw std::invalid_argument("Particle count does not match the octree");
     
     // Topology required by traversal.
-    if (octree.children == nullptr || octree.firstParticle == nullptr || octree.particleCount == nullptr)
+    if (octree.children.empty() || octree.firstParticle.empty() || octree.particleCount.empty())
         throw std::logic_error("Octree topology arrays required for traversal are not allocated");
    
     // Physical data required by Barnes-Hut approximation.
-    if (octree.mass == nullptr || octree.comX == nullptr || octree.comY == nullptr || octree.comZ == nullptr)
+    if (octree.mass.empty() || octree.comX.empty() || octree.comY.empty() || octree.comZ.empty())
         throw std::logic_error("Octree physical data is not allocated");
     
     // Cell geometry required by the acceptance criterion.
-    if (octree.centerX == nullptr || octree.centerY == nullptr || octree.centerZ == nullptr || octree.halfSize == nullptr)
+    if (octree.centerX.empty() || octree.centerY.empty() || octree.centerZ.empty() || octree.halfSize.empty())
         throw std::logic_error("Octree geometry is not allocated");
     
 
@@ -295,34 +297,21 @@ void computeBarnesHutAcceleration(const Octree& octree, const std::uint32_t* d_s
         throw std::invalid_argument("Gravitational constant must be finite and positive");
 
     const double softeningSquared = parameters.softening * parameters.softening;
-    int* errorCodeDevice = nullptr;
+    thrust::device_vector<int> errorCodeDevice(1, 0);
+    int* const errorCode = nbody::deviceData(errorCodeDevice);
 
-    try
-    {
-        checkCuda(cudaMalloc(reinterpret_cast<void**>(&errorCodeDevice), sizeof(int)), "allocate Barnes-Hut error code");
-        checkCuda(cudaMemset(errorCodeDevice, 0, sizeof(int)), "initialize Barnes-Hut error code");
+    constexpr int threadsPerBlock = 256;
+    const int blocks = (octree.nParticles + threadsPerBlock - 1) / threadsPerBlock;
 
-        constexpr int threadsPerBlock = 256;
-        const int blocks = (octree.nParticles + threadsPerBlock - 1) / threadsPerBlock;
+    computeBarnesHutAccelerationKernel<<<blocks, threadsPerBlock>>>(octree.device_view(), d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ, d_accelerationX, d_accelerationY, d_accelerationZ, parameters.theta, softeningSquared, parameters.gravitationalConstant, errorCode);
 
-        computeBarnesHutAccelerationKernel<<<blocks, threadsPerBlock>>>(octree, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ, d_accelerationX, d_accelerationY, d_accelerationZ, parameters.theta, softeningSquared, parameters.gravitationalConstant, errorCodeDevice);
+    checkCuda(cudaGetLastError(), "computeBarnesHutAccelerationKernel launch");
+    checkCuda(cudaDeviceSynchronize(), "computeBarnesHutAccelerationKernel execution");
 
-        checkCuda(cudaGetLastError(), "computeBarnesHutAccelerationKernel launch");
-        checkCuda(cudaDeviceSynchronize(), "computeBarnesHutAccelerationKernel execution");
+    int hostErrorCode = 0;
 
-        int errorCode = 0;
+    checkCuda(cudaMemcpy(&hostErrorCode, errorCode, sizeof(int), cudaMemcpyDeviceToHost), "copy Barnes-Hut error code");
 
-        checkCuda(cudaMemcpy(&errorCode, errorCodeDevice, sizeof(int), cudaMemcpyDeviceToHost), "copy Barnes-Hut error code");
-
-        if (errorCode != 0)
-            throw std::runtime_error(traversalErrorMessage(errorCode));
-        
-        cudaFree(errorCodeDevice);
-        errorCodeDevice = nullptr;
-    }
-    catch (...)
-    {
-        cudaFree(errorCodeDevice);
-        throw;
-    }
+    if (hostErrorCode != 0)
+        throw std::runtime_error(traversalErrorMessage(hostErrorCode));
 }

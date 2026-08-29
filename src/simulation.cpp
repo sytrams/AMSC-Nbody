@@ -168,19 +168,15 @@ void Simulation::rebuildSpatialStructure() {
   // intermediate CUDA allocations if construction throws.
   releaseSpatialResources(groups_, radixTree_, plan_, octree_);
 
-  groups_ = staged.groups;
-  staged.groups = {};
-  radixTree_ = staged.radixTree;
-  staged.radixTree = {};
-  plan_ = staged.plan;
-  staged.plan = {};
-  octree_ = staged.octree;
-  staged.octree = {};
+  groups_ = std::move(staged.groups);
+  radixTree_ = std::move(staged.radixTree);
+  plan_ = std::move(staged.plan);
+  octree_ = std::move(staged.octree);
   mortonKeys_ = std::move(stagedMorton);
 }
 
 void Simulation::computeAccelerations() {
-  if (deviceState_ == nullptr || mortonKeys_ == nullptr)
+  if (!deviceState_ || mortonKeys_ == nullptr)
     throw std::logic_error("Simulation spatial/device state is not available");
 
   const DeviceParticlesView particleView = particles_.device_view();
@@ -196,7 +192,7 @@ void Simulation::computeAccelerations() {
 }
 
 void Simulation::updatePositions() {
-  if (deviceState_ == nullptr)
+  if (!deviceState_)
     throw std::logic_error("Simulation device state is not available");
 
   const DeviceParticlesView particleView = particles_.device_view();
@@ -210,7 +206,7 @@ void Simulation::updatePositions() {
 }
 
 void Simulation::updateVelocities() {
-  if (deviceState_ == nullptr)
+  if (!deviceState_)
     throw std::logic_error("Simulation device state is not available");
 
   const DeviceParticlesView particleView = particles_.device_view();
@@ -225,6 +221,5 @@ void Simulation::updateVelocities() {
 void Simulation::releaseResources() noexcept {
   mortonKeys_.reset();
   releaseSpatialResources(groups_, radixTree_, plan_, octree_);
-  nbody::detail::destroySimulationDeviceState(deviceState_);
-  deviceState_ = nullptr;
+  deviceState_.reset();
 }

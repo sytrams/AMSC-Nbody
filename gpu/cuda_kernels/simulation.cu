@@ -34,15 +34,18 @@ struct SimulationDeviceState {
   thrust::device_vector<double> nextAccelerationZ;
 };
 
-SimulationDeviceState *createSimulationDeviceState(std::size_t particleCount) {
+SimulationDeviceStatePtr
+createSimulationDeviceState(std::size_t particleCount) {
   if (particleCount == 0)
     throw std::invalid_argument("Simulation device state cannot be empty");
 
-  return new SimulationDeviceState(particleCount);
+  auto state = std::make_unique<SimulationDeviceState>(particleCount);
+  return SimulationDeviceStatePtr(state.release());
 }
 
-void destroySimulationDeviceState(SimulationDeviceState *state) noexcept {
-  delete state;
+void SimulationDeviceStateDeleter::operator()(
+    SimulationDeviceState *state) const noexcept {
+  std::default_delete<SimulationDeviceState>{}(state);
 }
 
 DeviceAccelerationView

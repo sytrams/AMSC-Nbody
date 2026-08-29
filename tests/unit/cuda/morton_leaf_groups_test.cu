@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "cuda_test.hpp"
+#include "device_array.hpp"
 #include "morton_leaf_groups.hpp"
 
 namespace 
@@ -100,36 +101,17 @@ namespace
         const std::vector<int>& expectedFirstParticle,
         const std::vector<int>& expectedParticleCount)
     {
-        std::uint32_t* d_sortedKeys = nullptr;
+        const DeviceArray<std::uint32_t> deviceKeys(sortedKeys);
         MortonLeafGroups groups{};
 
-        try
-        {
-            const std::size_t inputBytes =
-                sortedKeys.size() * sizeof(std::uint32_t);
+        allocateMortonLeafGroups(
+            groups,
+            static_cast<int>(sortedKeys.size()));
 
-            checkCuda(
-                cudaMalloc(
-                    reinterpret_cast<void**>(&d_sortedKeys),
-                    inputBytes),
-                "cudaMalloc test sorted keys");
-
-            checkCuda(
-                cudaMemcpy(
-                    d_sortedKeys,
-                    sortedKeys.data(),
-                    inputBytes,
-                    cudaMemcpyHostToDevice),
-                "copy test sorted keys to device");
-
-            allocateMortonLeafGroups(
-                groups,
-                static_cast<int>(sortedKeys.size()));
-
-            buildMortonLeafGroups(
-                groups,
-                d_sortedKeys,
-                static_cast<int>(sortedKeys.size()));
+        buildMortonLeafGroups(
+            groups,
+            deviceKeys.get(),
+            static_cast<int>(sortedKeys.size()));
 
             EXPECT_EQ(groups.nParticles, static_cast<int>(sortedKeys.size()))
                 << "groups.nParticles is incorrect";
@@ -160,7 +142,7 @@ namespace
             checkCuda(
                 cudaMemcpy(
                     actualUniqueKeys.data(),
-                    groups.uniqueKeys,
+                    nbody::deviceData(groups.uniqueKeys),
                     keyBytes,
                     cudaMemcpyDeviceToHost),
                 "copy unique keys to host");
@@ -168,7 +150,7 @@ namespace
             checkCuda(
                 cudaMemcpy(
                     actualFirstParticle.data(),
-                    groups.firstParticle,
+                    nbody::deviceData(groups.firstParticle),
                     integerBytes,
                     cudaMemcpyDeviceToHost),
                 "copy group offsets to host");
@@ -176,7 +158,7 @@ namespace
             checkCuda(
                 cudaMemcpy(
                     actualParticleCount.data(),
-                    groups.particleCount,
+                    nbody::deviceData(groups.particleCount),
                     integerBytes,
                     cudaMemcpyDeviceToHost),
                 "copy group counts to host");
@@ -187,69 +169,25 @@ namespace
 
             EXPECT_EQ(actualParticleCount, expectedParticleCount) << name + " particleCount";
 
-            validateInvariants(
-                sortedKeys,
-                actualUniqueKeys,
-                actualFirstParticle,
-                actualParticleCount);
-        }
-        catch (...)
-        {
-            freeMortonLeafGroups(groups);
-            cudaFree(d_sortedKeys);
-            throw;
-        }
-
-        freeMortonLeafGroups(groups);
-        cudaFree(d_sortedKeys);
+        validateInvariants(
+            sortedKeys,
+            actualUniqueKeys,
+            actualFirstParticle,
+            actualParticleCount);
     }
 
     void testCapacityValidation()
     {
-        std::uint32_t* d_sortedKeys = nullptr;
         MortonLeafGroups groups{};
+        const std::vector<std::uint32_t> sortedKeys{1u, 2u, 3u};
+        const DeviceArray<std::uint32_t> deviceKeys(sortedKeys);
 
-        try
-        {
-            const std::vector<std::uint32_t> sortedKeys{
-                1u,
-                2u,
-                3u
-            };
+        // Gli array possono contenere soltanto due elementi.
+        allocateMortonLeafGroups(groups, 2);
 
-            checkCuda(
-                cudaMalloc(
-                    reinterpret_cast<void**>(&d_sortedKeys),
-                    sortedKeys.size() * sizeof(std::uint32_t)),
-                "cudaMalloc capacity-test keys");
-
-            checkCuda(
-                cudaMemcpy(
-                    d_sortedKeys,
-                    sortedKeys.data(),
-                    sortedKeys.size() * sizeof(std::uint32_t),
-                    cudaMemcpyHostToDevice),
-                "copy capacity-test keys");
-
-            // Gli array possono contenere soltanto due elementi.
-            allocateMortonLeafGroups(groups, 2);
-
-            EXPECT_THROW(
-                buildMortonLeafGroups(
-                    groups,
-                    d_sortedKeys,
-                    3),
-                std::invalid_argument);
-        }
-        catch (...)
-        {
-            freeMortonLeafGroups(groups);
-            cudaFree(d_sortedKeys);
-            throw;
-        }
-
-        freeMortonLeafGroups(groups);
-        cudaFree(d_sortedKeys);
+        EXPECT_THROW(
+            buildMortonLeafGroups(groups, deviceKeys.get(), 3),
+            std::invalid_argument);
     }
 } // namespace
 

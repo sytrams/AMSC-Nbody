@@ -10,6 +10,7 @@
 #include <vector>
 
 #include "cuda_test.hpp"
+#include "device_array.hpp"
 #include "morton_leaf_groups.hpp"
 #include "tree_builder.hpp"
 
@@ -39,60 +40,6 @@ void expectRelativeNear(
     EXPECT_NEAR(actual, expected, 2.0e-5 * scale)
         << label;
 }
-
-template <typename T>
-class DeviceArray
-{
-public:
-    explicit DeviceArray(
-        const std::vector<T>& host)
-        : size_(host.size())
-    {
-        if (size_ == 0)
-            return;
-
-        checkCuda(
-            cudaMalloc(
-                reinterpret_cast<void**>(&data_),
-                size_ * sizeof(T)),
-            "cudaMalloc DeviceArray");
-
-        try
-        {
-            checkCuda(
-                cudaMemcpy(
-                    data_,
-                    host.data(),
-                    size_ * sizeof(T),
-                    cudaMemcpyHostToDevice),
-                "copy DeviceArray to device");
-        }
-        catch (...)
-        {
-            cudaFree(data_);
-            data_ = nullptr;
-            throw;
-        }
-    }
-
-    ~DeviceArray()
-    {
-        cudaFree(data_);
-    }
-
-    DeviceArray(const DeviceArray&) = delete;
-    DeviceArray& operator=(
-        const DeviceArray&) = delete;
-
-    const T* get() const noexcept
-    {
-        return data_;
-    }
-
-private:
-    T* data_ = nullptr;
-    std::size_t size_ = 0;
-};
 
 struct Aggregate
 {
@@ -289,7 +236,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 actualUniqueKeys.data(),
-                groups.uniqueKeys,
+                nbody::deviceData(groups.uniqueKeys),
                 static_cast<std::size_t>(nLeaves) *
                     sizeof(std::uint32_t),
                 cudaMemcpyDeviceToHost),
@@ -298,7 +245,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 actualFirstParticle.data(),
-                groups.firstParticle,
+                nbody::deviceData(groups.firstParticle),
                 static_cast<std::size_t>(nLeaves) *
                     sizeof(int),
                 cudaMemcpyDeviceToHost),
@@ -307,7 +254,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 actualParticleCount.data(),
-                groups.particleCount,
+                nbody::deviceData(groups.particleCount),
                 static_cast<std::size_t>(nLeaves) *
                     sizeof(int),
                 cudaMemcpyDeviceToHost),
@@ -337,7 +284,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 treeMass.data(),
-                tree.mass,
+                nbody::deviceData(tree.mass),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(double),
                 cudaMemcpyDeviceToHost),
@@ -346,7 +293,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 treeComX.data(),
-                tree.comX,
+                nbody::deviceData(tree.comX),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(double),
                 cudaMemcpyDeviceToHost),
@@ -355,7 +302,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 treeComY.data(),
-                tree.comY,
+                nbody::deviceData(tree.comY),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(double),
                 cudaMemcpyDeviceToHost),
@@ -364,7 +311,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 treeComZ.data(),
-                tree.comZ,
+                nbody::deviceData(tree.comZ),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(double),
                 cudaMemcpyDeviceToHost),
@@ -422,7 +369,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 parent.data(),
-                tree.parent,
+                nbody::deviceData(tree.parent),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(int),
                 cudaMemcpyDeviceToHost),
@@ -451,7 +398,7 @@ void runCase(
             checkCuda(
                 cudaMemcpy(
                     rangeFirst.data(),
-                    tree.rangeFirst,
+                    nbody::deviceData(tree.rangeFirst),
                     static_cast<std::size_t>(
                         nLeaves - 1) *
                         sizeof(int),
@@ -461,7 +408,7 @@ void runCase(
             checkCuda(
                 cudaMemcpy(
                     rangeLast.data(),
-                    tree.rangeLast,
+                    nbody::deviceData(tree.rangeLast),
                     static_cast<std::size_t>(
                         nLeaves - 1) *
                         sizeof(int),
@@ -471,7 +418,7 @@ void runCase(
             checkCuda(
                 cudaMemcpy(
                     prefixLength.data(),
-                    tree.prefixLength,
+                    nbody::deviceData(tree.prefixLength),
                     static_cast<std::size_t>(
                         nLeaves - 1) *
                         sizeof(int),
@@ -481,7 +428,7 @@ void runCase(
             checkCuda(
                 cudaMemcpy(
                     visitCount.data(),
-                    tree.visitCount,
+                    nbody::deviceData(tree.visitCount),
                     static_cast<std::size_t>(
                         nLeaves - 1) *
                         sizeof(int),

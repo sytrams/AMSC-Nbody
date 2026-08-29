@@ -3,24 +3,9 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "tree_builder.hpp"
-
-namespace {
-
-template <typename T>
-void allocateDeviceArray(T*& pointer, std::size_t count, const char* name)
-{
-    if (count == 0)
-        return;
-
-    const cudaError_t error = cudaMalloc(reinterpret_cast<void**>(&pointer), count * sizeof(T));
-
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("cudaMalloc ") + name + " failed: " + cudaGetErrorString(error));
-}
-
-} // namespace
 
 __device__ int longestCommonPrefix(const std::uint32_t* keys, int i, int j, int N)
 {
@@ -100,7 +85,7 @@ __device__ int findSplit(const std::uint32_t* keys, int first, int last, int N)
 }
 
 //CUDA kernel
-__global__ void buildTreeKernel(Tree tree, const std::uint32_t* keys, int N)
+__global__ void buildTreeKernel(TreeDeviceView tree, const std::uint32_t* keys, int N)
 {
     const int i = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -128,7 +113,7 @@ __global__ void buildTreeKernel(Tree tree, const std::uint32_t* keys, int N)
     tree.parent[rightChild] = currentNode;
 }
 
-__global__ void initializeLeavesKernel(Tree tree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, int N)
+__global__ void initializeLeavesKernel(TreeDeviceView tree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, int N)
 {
     const int leaf = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -144,7 +129,7 @@ __global__ void initializeLeavesKernel(Tree tree, const std::uint32_t* sortedInd
     tree.comZ[leaf] = positionZ[particleIndex];
 }
 
-__global__ void initializeGroupedLeavesKernel(Tree tree, const int* firstParticle, const int* particleCount, int nGroups, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ)
+__global__ void initializeGroupedLeavesKernel(TreeDeviceView tree, const int* firstParticle, const int* particleCount, int nGroups, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ)
 {
     const int group =static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -196,7 +181,7 @@ __global__ void initializeGroupedLeavesKernel(Tree tree, const int* firstParticl
     }
 }
 
-__global__ void computeCentersOfMassKernel(Tree tree, int N)
+__global__ void computeCentersOfMassKernel(TreeDeviceView tree, int N)
 {
     const int leaf = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -251,7 +236,11 @@ __global__ void computeCentersOfMassKernel(Tree tree, int N)
 //memory allocation
 void allocateTree(Tree& tree, int N)
 {
-    if (tree.left != nullptr || tree.right != nullptr || tree.parent != nullptr || tree.rangeFirst != nullptr || tree.rangeLast != nullptr || tree.prefixLength != nullptr || tree.visitCount != nullptr || tree.mass != nullptr || tree.comX != nullptr || tree.comY != nullptr || tree.comZ != nullptr)
+    if (!tree.left.empty() || !tree.right.empty() || !tree.parent.empty() ||
+        !tree.rangeFirst.empty() || !tree.rangeLast.empty() ||
+        !tree.prefixLength.empty() || !tree.visitCount.empty() ||
+        !tree.mass.empty() || !tree.comX.empty() || !tree.comY.empty() ||
+        !tree.comZ.empty())
         throw std::logic_error("Tree memory is already allocated");
 
     if (N <= 0)
@@ -260,69 +249,31 @@ void allocateTree(Tree& tree, int N)
     const std::size_t internalNodeCount = static_cast<std::size_t>(N - 1);
     const std::size_t totalNodeCount = static_cast<std::size_t>(N) * 2 - 1;
 
-    try
+    Tree staged;
+    if (N > 1)
     {
-        if (N > 1)
-        {
-            allocateDeviceArray(tree.left, internalNodeCount, "tree.left");
-            allocateDeviceArray(tree.right, internalNodeCount, "tree.right");
-            allocateDeviceArray(tree.rangeFirst, internalNodeCount, "tree.rangeFirst");
-            allocateDeviceArray(tree.rangeLast, internalNodeCount, "tree.rangeLast");
-            allocateDeviceArray(tree.prefixLength, internalNodeCount, "tree.prefixLength");
-            allocateDeviceArray(tree.visitCount, internalNodeCount, "tree.visitCount");
-        }
-
-        allocateDeviceArray(tree.parent, totalNodeCount, "tree.parent");
-        allocateDeviceArray(tree.mass, totalNodeCount, "tree.mass");
-        allocateDeviceArray(tree.comX, totalNodeCount, "tree.comX");
-        allocateDeviceArray(tree.comY, totalNodeCount, "tree.comY");
-        allocateDeviceArray(tree.comZ, totalNodeCount, "tree.comZ");
-    }
-    catch (...)
-    {
-        freeTree(tree);
-        throw;
+        staged.left.resize(internalNodeCount);
+        staged.right.resize(internalNodeCount);
+        staged.rangeFirst.resize(internalNodeCount);
+        staged.rangeLast.resize(internalNodeCount);
+        staged.prefixLength.resize(internalNodeCount);
+        staged.visitCount.resize(internalNodeCount);
     }
 
-    tree.nLeaves = N;
-    tree.nInternalNodes = N - 1;
+    staged.parent.resize(totalNodeCount);
+    staged.mass.resize(totalNodeCount);
+    staged.comX.resize(totalNodeCount);
+    staged.comY.resize(totalNodeCount);
+    staged.comZ.resize(totalNodeCount);
+    staged.nLeaves = N;
+    staged.nInternalNodes = N - 1;
+    tree = std::move(staged);
 }
 
 //free memory
 void freeTree(Tree& tree)
 {
-    cudaFree(tree.left);
-    cudaFree(tree.right);
-    cudaFree(tree.parent);
-
-    cudaFree(tree.rangeFirst);
-    cudaFree(tree.rangeLast);
-    cudaFree(tree.prefixLength);
-
-    cudaFree(tree.mass);
-    cudaFree(tree.comX);
-    cudaFree(tree.comY);
-    cudaFree(tree.comZ);
-
-    cudaFree(tree.visitCount);
-
-    tree.left = nullptr;
-    tree.right = nullptr;
-    tree.parent = nullptr;
-
-    tree.rangeFirst = nullptr;
-    tree.rangeLast = nullptr;
-    tree.prefixLength = nullptr;
-
-    tree.mass = nullptr;
-    tree.comX = nullptr;
-    tree.comY = nullptr;
-    tree.comZ = nullptr;
-
-    tree.visitCount = nullptr;
-
-    tree.nLeaves = 0;
-    tree.nInternalNodes = 0;
+    tree = {};
 }
 
 //host function
@@ -334,13 +285,13 @@ void buildTree (Tree& tree, const std::uint32_t* d_sortedKeys, int N)
     if (tree.nLeaves != N)
         throw std::invalid_argument("buildTree N does not match allocated tree size");
 
-    if (tree.parent == nullptr)
+    if (tree.parent.empty())
         throw std::logic_error("Tree memory has not been allocated");
 
     if (N > 1 &&
-        (tree.left == nullptr || tree.right == nullptr ||
-         tree.rangeFirst == nullptr || tree.rangeLast == nullptr ||
-         tree.prefixLength == nullptr))
+        (tree.left.empty() || tree.right.empty() ||
+         tree.rangeFirst.empty() || tree.rangeLast.empty() ||
+         tree.prefixLength.empty()))
     {
         throw std::logic_error(
             "Tree topology and metadata arrays have not been allocated");
@@ -351,7 +302,8 @@ void buildTree (Tree& tree, const std::uint32_t* d_sortedKeys, int N)
 
     const std::size_t totalNodes = static_cast<std::size_t>(2 * N - 1);
 
-    cudaError_t error = cudaMemset(tree.parent, 0xFF, totalNodes*sizeof(int));
+    const TreeDeviceView treeView = tree.device_view();
+    cudaError_t error = cudaMemset(treeView.parent, 0xFF, totalNodes*sizeof(int));
 
     if (error!=cudaSuccess)
         throw std::runtime_error(std::string("cudaMemset(tree.parent): ") + cudaGetErrorString(error));
@@ -362,7 +314,7 @@ void buildTree (Tree& tree, const std::uint32_t* d_sortedKeys, int N)
     constexpr int threadsPerBlock = 256;
 
     const int blocks = (N-1 + threadsPerBlock -1)/threadsPerBlock;
-    buildTreeKernel<<<blocks, threadsPerBlock>>>(tree, d_sortedKeys, N);
+    buildTreeKernel<<<blocks, threadsPerBlock>>>(treeView, d_sortedKeys, N);
     error = cudaGetLastError();
 
     if (error!=cudaSuccess)
@@ -385,13 +337,13 @@ void buildTreeFromMortonGroups(Tree& tree, const MortonLeafGroups& groups)
     if (groups.nGroups > groups.nParticles || groups.nParticles > groups.capacity)
         throw std::logic_error("MortonLeafGroups metadata is inconsistent");
 
-    if (groups.uniqueKeys == nullptr)
+    if (groups.uniqueKeys.empty())
         throw std::logic_error("MortonLeafGroups uniqueKeys is not allocated");
 
     if (tree.nLeaves != groups.nGroups)
         throw std::invalid_argument("Tree leaf count does not match Morton group count");
 
-    buildTree(tree, groups.uniqueKeys, groups.nGroups);
+    buildTree(tree, nbody::deviceData(groups.uniqueKeys), groups.nGroups);
 }
 
 void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ, int N)
@@ -408,17 +360,19 @@ void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, cons
     if (d_mass == nullptr || d_positionX == nullptr || d_positionY == nullptr || d_positionZ == nullptr)
         throw std::invalid_argument("Particle data arrays must not be null");
 
-    if (tree.parent == nullptr || tree.mass == nullptr || tree.comX == nullptr || tree.comY == nullptr || tree.comZ == nullptr)
+    if (tree.parent.empty() || tree.mass.empty() || tree.comX.empty() ||
+        tree.comY.empty() || tree.comZ.empty())
         throw std::logic_error("Tree memory has not been fully allocated");
 
-    if (N > 1 && (tree.left == nullptr || tree.right == nullptr || tree.visitCount == nullptr))
+    if (N > 1 && (tree.left.empty() || tree.right.empty() || tree.visitCount.empty()))
         throw std::logic_error("Tree internal-node memory has not been allocated");
 
     constexpr int threadsPerBlock = 256;
     const int blocks = (N +  threadsPerBlock - 1)/threadsPerBlock;
 
     //leaves recieve particle data floowing SortPairs permutation
-    initializeLeavesKernel<<<blocks, threadsPerBlock>>>(tree, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ, N);
+    const TreeDeviceView treeView = tree.device_view();
+    initializeLeavesKernel<<<blocks, threadsPerBlock>>>(treeView, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ, N);
 
     cudaError_t error = cudaGetLastError();
 
@@ -433,12 +387,12 @@ void computeCenterOfMass (Tree& tree, const std::uint32_t* d_sortedIndices, cons
         return;
     }
 
-    error  = cudaMemset(tree.visitCount, 0, static_cast<std::size_t>(N-1) * sizeof(int));
+    error  = cudaMemset(treeView.visitCount, 0, static_cast<std::size_t>(N-1) * sizeof(int));
 
     if (error != cudaSuccess)
         throw std::runtime_error(std::string("cudaMemset tree.visitCount failed: ") + cudaGetErrorString(error));
 
-    computeCentersOfMassKernel<<<blocks, threadsPerBlock>>>(tree, N);
+    computeCentersOfMassKernel<<<blocks, threadsPerBlock>>>(treeView, N);
 
     error = cudaGetLastError();
 
@@ -465,7 +419,7 @@ void computeGroupedCenterOfMass(Tree& tree, const MortonLeafGroups& groups, cons
     if (tree.nLeaves != groups.nGroups)
         throw std::invalid_argument("Tree leaf count does not match Morton group count");
 
-    if (groups.firstParticle == nullptr || groups.particleCount == nullptr)
+    if (groups.firstParticle.empty() || groups.particleCount.empty())
         throw std::logic_error("MortonLeafGroups arrays are not allocated");
 
     if (d_sortedIndices == nullptr)
@@ -474,19 +428,21 @@ void computeGroupedCenterOfMass(Tree& tree, const MortonLeafGroups& groups, cons
     if (d_mass == nullptr || d_positionX == nullptr || d_positionY == nullptr || d_positionZ == nullptr)
         throw std::invalid_argument("Particle data arrays must not be null");
 
-    if (tree.parent == nullptr || tree.mass == nullptr || tree.comX == nullptr || tree.comY == nullptr || tree.comZ == nullptr)
+    if (tree.parent.empty() || tree.mass.empty() || tree.comX.empty() ||
+        tree.comY.empty() || tree.comZ.empty())
         throw std::logic_error("Tree memory has not been fully allocated");
 
     const int nGroups = groups.nGroups;
 
-    if (nGroups > 1 && (tree.left == nullptr || tree.right == nullptr || tree.visitCount == nullptr))
+    if (nGroups > 1 && (tree.left.empty() || tree.right.empty() || tree.visitCount.empty()))
         throw std::logic_error("Tree internal-node memory has not been allocated");
 
     constexpr int threadsPerBlock = 256;
 
     const int blocks = (nGroups + threadsPerBlock - 1) / threadsPerBlock;
 
-    initializeGroupedLeavesKernel<<<blocks, threadsPerBlock>>>(tree, groups.firstParticle, groups.particleCount, nGroups, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ);
+    const TreeDeviceView treeView = tree.device_view();
+    initializeGroupedLeavesKernel<<<blocks, threadsPerBlock>>>(treeView, nbody::deviceData(groups.firstParticle), nbody::deviceData(groups.particleCount), nGroups, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ);
 
     cudaError_t error = cudaGetLastError();
 
@@ -505,12 +461,12 @@ void computeGroupedCenterOfMass(Tree& tree, const MortonLeafGroups& groups, cons
         return;
     }
 
-    error = cudaMemset(tree.visitCount, 0, static_cast<std::size_t>(nGroups - 1) * sizeof(int));
+    error = cudaMemset(treeView.visitCount, 0, static_cast<std::size_t>(nGroups - 1) * sizeof(int));
 
     if (error != cudaSuccess)
         throw std::runtime_error(std::string("cudaMemset tree.visitCount failed: ") + cudaGetErrorString(error));
 
-    computeCentersOfMassKernel<<<blocks, threadsPerBlock>>>(tree, nGroups);
+    computeCentersOfMassKernel<<<blocks, threadsPerBlock>>>(treeView, nGroups);
 
     error = cudaGetLastError();
 

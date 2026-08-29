@@ -6,6 +6,8 @@
 
 #include <cuda_runtime.h>
 
+#include "device_vector_utils.hpp"
+
 namespace nbody::streaming {
 namespace {
 
@@ -49,16 +51,12 @@ DeviceFrameWriter::DeviceFrameWriter(ConstDeviceParticlesView particles,
         "Cannot capture an empty or incomplete device particle view");
   }
 
-  checkCuda(cudaMalloc(reinterpret_cast<void **>(&devicePositions_),
-                       std::min(kFrameChunkParticles, sampleParticleCount_) *
-                           kPositionComponents * sizeof(float)),
-            "Could not allocate the graphical sampling buffer");
+  devicePositions_.resize(
+      std::min(kFrameChunkParticles, sampleParticleCount_) *
+      kPositionComponents);
 }
 
-DeviceFrameWriter::~DeviceFrameWriter() noexcept {
-  if (devicePositions_ != nullptr)
-    (void)cudaFree(devicePositions_);
-}
+DeviceFrameWriter::~DeviceFrameWriter() noexcept = default;
 
 std::size_t DeviceFrameWriter::sourceParticleCount() const noexcept {
   return particles_.count;
@@ -80,10 +78,11 @@ DeviceFrameWriter::write(const FrameSpool &spool, std::uint64_t sequence,
                                                        threads);
         gatherPositionSamples<<<blocks, threads>>>(
             particles_.x, particles_.y, particles_.z, particles_.count,
-            sampleParticleCount_, offset, count, devicePositions_);
+            sampleParticleCount_, offset, count,
+            nbody::deviceData(devicePositions_));
         checkCuda(cudaGetLastError(),
                   "Could not launch the graphical sampling kernel");
-        checkCuda(cudaMemcpy(xyz, devicePositions_,
+        checkCuda(cudaMemcpy(xyz, nbody::deviceData(devicePositions_),
                              count * kPositionComponents * sizeof(float),
                              cudaMemcpyDeviceToHost),
                   "Could not copy graphical samples to the frame writer");

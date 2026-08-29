@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <memory>
 
 namespace nbody::detail {
 
@@ -13,9 +14,15 @@ struct DeviceAccelerationView {
 
 struct SimulationDeviceState;
 
-[[nodiscard]] SimulationDeviceState *
+struct SimulationDeviceStateDeleter {
+  void operator()(SimulationDeviceState *state) const noexcept;
+};
+
+using SimulationDeviceStatePtr =
+    std::unique_ptr<SimulationDeviceState, SimulationDeviceStateDeleter>;
+
+[[nodiscard]] SimulationDeviceStatePtr
 createSimulationDeviceState(std::size_t particleCount);
-void destroySimulationDeviceState(SimulationDeviceState *state) noexcept;
 
 [[nodiscard]] DeviceAccelerationView
 currentAcceleration(SimulationDeviceState &state) noexcept;

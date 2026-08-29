@@ -7,13 +7,10 @@
 #include "octree_types.hpp"
 #include "particle.hpp"
 #include "radix_to_octree.hpp"
+#include "simulation_cuda.hpp"
 #include "tree_types.hpp"
 
 class MortonKeys;
-
-namespace nbody::detail {
-struct SimulationDeviceState;
-}
 
 struct SimulationConfig {
   double timeStep;
@@ -58,7 +55,7 @@ private:
   // sorted-particle order. Acceleration storage is kept opaque so CUDA-only
   // details do not leak into this public header.
   std::unique_ptr<MortonKeys> mortonKeys_;
-  nbody::detail::SimulationDeviceState *deviceState_ = nullptr;
+  nbody::detail::SimulationDeviceStatePtr deviceState_;
 
   double time_ = 0.0;
   std::size_t stepNumber_ = 0;

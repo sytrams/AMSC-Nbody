@@ -100,7 +100,7 @@ void copyTopologyToDevice(
 
     ASSERT_EQ(
         cudaMemcpy(
-            octree.level,
+            nbody::deviceData(octree.level),
             levels.data(),
             levels.size() * sizeof(int),
             cudaMemcpyHostToDevice),
@@ -108,7 +108,7 @@ void copyTopologyToDevice(
 
     ASSERT_EQ(
         cudaMemcpy(
-            octree.prefix,
+            nbody::deviceData(octree.prefix),
             prefixes.data(),
             prefixes.size() * sizeof(std::uint32_t),
             cudaMemcpyHostToDevice),
@@ -154,16 +154,16 @@ TEST_F(
     computeOctreeGeometry(octree, box);
 
     const auto centerX =
-        copyFromDevice(octree.centerX, 1);
+        copyFromDevice(nbody::deviceData(octree.centerX), 1);
 
     const auto centerY =
-        copyFromDevice(octree.centerY, 1);
+        copyFromDevice(nbody::deviceData(octree.centerY), 1);
 
     const auto centerZ =
-        copyFromDevice(octree.centerZ, 1);
+        copyFromDevice(nbody::deviceData(octree.centerZ), 1);
 
     const auto halfSize =
-        copyFromDevice(octree.halfSize, 1);
+        copyFromDevice(nbody::deviceData(octree.halfSize), 1);
 
     // Input range is 20.
     // Bbox adds 10%, therefore side = 22.
@@ -205,22 +205,22 @@ TEST_F(
 
     const auto centerX =
         copyFromDevice(
-            octree.centerX,
+            nbody::deviceData(octree.centerX),
             octree.nNodes);
 
     const auto centerY =
         copyFromDevice(
-            octree.centerY,
+            nbody::deviceData(octree.centerY),
             octree.nNodes);
 
     const auto centerZ =
         copyFromDevice(
-            octree.centerZ,
+            nbody::deviceData(octree.centerZ),
             octree.nNodes);
 
     const auto halfSize =
         copyFromDevice(
-            octree.halfSize,
+            nbody::deviceData(octree.halfSize),
             octree.nNodes);
 
     // Root half-size = 11.
@@ -276,16 +276,16 @@ TEST_F(
     computeOctreeGeometry(octree, box);
 
     const auto centerX =
-        copyFromDevice(octree.centerX, 2);
+        copyFromDevice(nbody::deviceData(octree.centerX), 2);
 
     const auto centerY =
-        copyFromDevice(octree.centerY, 2);
+        copyFromDevice(nbody::deviceData(octree.centerY), 2);
 
     const auto centerZ =
-        copyFromDevice(octree.centerZ, 2);
+        copyFromDevice(nbody::deviceData(octree.centerZ), 2);
 
     const auto halfSize =
-        copyFromDevice(octree.halfSize, 2);
+        copyFromDevice(nbody::deviceData(octree.halfSize), 2);
 
     //
     // Root:

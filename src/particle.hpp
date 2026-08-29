@@ -60,6 +60,9 @@ ParticleFileHeader detect_particle_file_header(std::ifstream &inFile) {
 
 } // namespace
 
+// These views borrow storage from Particles. They never own or free the raw
+// device pointers, and remain valid only while the owning vectors are alive
+// and are not resized.
 struct DeviceParticlesView {
   std::size_t count;
 

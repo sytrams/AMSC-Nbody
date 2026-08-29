@@ -4,6 +4,9 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <utility>
+
+#include <thrust/device_vector.h>
 
 #include "octree_builder.hpp"
 
@@ -13,18 +16,6 @@ namespace
     {
         if (error != cudaSuccess)
             throw std::runtime_error(std::string(operation) + " failed: " + cudaGetErrorString(error));
-    }
-
-    template <typename T>
-    void allocateDeviceArray(T*& pointer, std::size_t count, const char* name)
-    {
-        if (count == 0)
-            return;
-
-        const cudaError_t error = cudaMalloc(reinterpret_cast<void**>(&pointer), count * sizeof(T));
-
-        if (error != cudaSuccess)
-            throw std::runtime_error(std::string("cudaMalloc ") + name + " failed: " + cudaGetErrorString(error));
     }
 
     const char* constructionErrorMessage(int errorCode)
@@ -77,7 +68,7 @@ __device__ int octantAtLevel(std::uint32_t key, int level)
     return static_cast<int>((key >> shift) & 0x7u);
 }
 
-__device__ bool representativeKeyForRadixNode(const Tree& radixTree, const MortonLeafGroups& groups, int radixNode, std::uint32_t& key)
+__device__ bool representativeKeyForRadixNode(const ConstTreeDeviceView& radixTree, const ConstMortonLeafGroupsDeviceView& groups, int radixNode, std::uint32_t& key)
 {
     if (radixNode < radixTree.nLeaves)
     {
@@ -96,7 +87,7 @@ __device__ bool representativeKeyForRadixNode(const Tree& radixTree, const Morto
     return true;
 }
 
-__global__ void materializeSparseOctreeKernel(Octree octree, Tree radixTree, MortonLeafGroups groups, RadixToOctreePlan plan, int* errorCode)
+__global__ void materializeSparseOctreeKernel(OctreeDeviceView octree, ConstTreeDeviceView radixTree, ConstMortonLeafGroupsDeviceView groups, ConstRadixToOctreePlanDeviceView plan, int* errorCode)
 {
     const int radixNode = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -240,27 +231,26 @@ void allocateOctreeTopology(Octree& octree, int nNodes)
     if (nNodes <= 0)
         throw std::invalid_argument("Octree node count must be positive");
 
-    if (octree.children != nullptr || octree.parent != nullptr || octree.level != nullptr || octree.prefix != nullptr || octree.firstParticle != nullptr || octree.particleCount != nullptr || octree.mass != nullptr || octree.comX != nullptr || octree.comY != nullptr || octree.comZ != nullptr || octree.centerX != nullptr || octree.centerY != nullptr || octree.centerZ != nullptr || octree.halfSize != nullptr || octree.pendingChildren != nullptr || octree.childCount != nullptr)
+    if (!octree.children.empty() || !octree.parent.empty() ||
+        !octree.level.empty() || !octree.prefix.empty() ||
+        !octree.firstParticle.empty() || !octree.particleCount.empty() ||
+        !octree.mass.empty() || !octree.comX.empty() || !octree.comY.empty() ||
+        !octree.comZ.empty() || !octree.centerX.empty() ||
+        !octree.centerY.empty() || !octree.centerZ.empty() ||
+        !octree.halfSize.empty() || !octree.pendingChildren.empty() ||
+        !octree.childCount.empty())
         throw std::logic_error("Octree memory is already allocated");
 
     const std::size_t nodeCount = static_cast<std::size_t>(nNodes);
-
-    try
-    {
-        allocateDeviceArray(octree.children, nodeCount * 8, "octree.children");
-        allocateDeviceArray(octree.parent, nodeCount,"octree.parent");
-        allocateDeviceArray(octree.level, nodeCount, "octree.level");
-        allocateDeviceArray(octree.prefix, nodeCount,"octree.prefix");
-        allocateDeviceArray(octree.firstParticle, nodeCount, "octree.firstParticle");
-        allocateDeviceArray(octree.particleCount, nodeCount, "octree.particleCount");
-    }
-    catch (...)
-    {
-        freeOctree(octree);
-        throw;
-    }
-
-    octree.nNodes = nNodes;
+    Octree staged;
+    staged.children.resize(nodeCount * 8);
+    staged.parent.resize(nodeCount);
+    staged.level.resize(nodeCount);
+    staged.prefix.resize(nodeCount);
+    staged.firstParticle.resize(nodeCount);
+    staged.particleCount.resize(nodeCount);
+    staged.nNodes = nNodes;
+    octree = std::move(staged);
 }
 
 void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const MortonLeafGroups& groups, const RadixToOctreePlan& plan)
@@ -271,7 +261,8 @@ void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const Mort
     if (groups.nGroups !=radixTree.nLeaves)
         throw std::invalid_argument("Morton groups and radix tree have different leaf counts");
 
-    if (groups.uniqueKeys == nullptr || groups.firstParticle == nullptr || groups.particleCount == nullptr)
+    if (groups.uniqueKeys.empty() || groups.firstParticle.empty() ||
+        groups.particleCount.empty())
         throw std::logic_error("Morton group arrays are not allocated");
 
     const int expectedRadixNodes = 2 * radixTree.nLeaves - 1;
@@ -285,24 +276,28 @@ void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const Mort
     if (octree.nNodes != plan.nOctreeNodes)
         throw std::invalid_argument("Allocated octree size does not match the construction plan");
 
-    if (octree.children == nullptr || octree.parent == nullptr || octree.level == nullptr || octree.prefix == nullptr || octree.firstParticle == nullptr || octree.particleCount == nullptr)
+    if (octree.children.empty() || octree.parent.empty() ||
+        octree.level.empty() || octree.prefix.empty() ||
+        octree.firstParticle.empty() || octree.particleCount.empty())
         throw std::logic_error("Octree topology memory is not allocated");
 
-    if (radixTree.parent == nullptr)
+    if (radixTree.parent.empty())
         throw std::logic_error("Radix parent array is not allocated");
 
-    if (radixTree.nLeaves > 1 && (radixTree.rangeFirst == nullptr || radixTree.prefixLength == nullptr))
+    if (radixTree.nLeaves > 1 && (radixTree.rangeFirst.empty() || radixTree.prefixLength.empty()))
         throw std::logic_error("Radix metadata is incomplete");
 
-    if (plan.radixLevel == nullptr || plan.edgeNodeCount == nullptr || plan.edgeNodeOffset == nullptr)
+    if (plan.radixLevel.empty() || plan.edgeNodeCount.empty() || plan.edgeNodeOffset.empty())
         throw std::logic_error("Radix-to-octree plan arrays are not allocated");
 
+    OctreeDeviceView octreeView = octree.device_view();
+
     //Empty child slots and parent IDs use -1.
-    checkCuda(cudaMemset(octree.children, 0xFF, static_cast<std::size_t>(octree.nNodes) * 8 * sizeof(int)), "initialize octree.children");
-    checkCuda(cudaMemset(octree.parent, 0xFF, static_cast<std::size_t>(octree.nNodes) * sizeof(int)), "initialize octree.parent");
+    checkCuda(cudaMemset(octreeView.children, 0xFF, static_cast<std::size_t>(octree.nNodes) * 8 * sizeof(int)), "initialize octree.children");
+    checkCuda(cudaMemset(octreeView.parent, 0xFF, static_cast<std::size_t>(octree.nNodes) * sizeof(int)), "initialize octree.parent");
     checkCuda(
         cudaMemset(
-            octree.level,
+            octreeView.level,
             0xFF,
             static_cast<std::size_t>(
                 octree.nNodes) *
@@ -310,7 +305,7 @@ void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const Mort
         "initialize octree.level");
     checkCuda(
         cudaMemset(
-            octree.prefix,
+            octreeView.prefix,
             0,
             static_cast<std::size_t>(
                 octree.nNodes) *
@@ -318,50 +313,37 @@ void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const Mort
         "initialize octree.prefix");
     checkCuda(
         cudaMemset(
-            octree.firstParticle,
+            octreeView.firstParticle,
             0xFF,
             static_cast<std::size_t>(
                 octree.nNodes) *
                 sizeof(int)),
         "initialize octree.firstParticle");
-    checkCuda(cudaMemset(octree.particleCount, 0, static_cast<std::size_t>(octree.nNodes) * sizeof(int)), "initialize octree.particleCount");
+    checkCuda(cudaMemset(octreeView.particleCount, 0, static_cast<std::size_t>(octree.nNodes) * sizeof(int)), "initialize octree.particleCount");
 
     const int rootLevel = 0;
     const std::uint32_t rootPrefix = 0u;
 
-    checkCuda(cudaMemcpy(octree.level, &rootLevel, sizeof(int), cudaMemcpyHostToDevice), "initialize octree root level");
-    checkCuda(cudaMemcpy(octree.prefix, &rootPrefix, sizeof(std::uint32_t), cudaMemcpyHostToDevice), "initialize octree root prefix");
+    checkCuda(cudaMemcpy(octreeView.level, &rootLevel, sizeof(int), cudaMemcpyHostToDevice), "initialize octree root level");
+    checkCuda(cudaMemcpy(octreeView.prefix, &rootPrefix, sizeof(std::uint32_t), cudaMemcpyHostToDevice), "initialize octree root prefix");
 
-    int* errorCodeDevice = nullptr;
+    thrust::device_vector<int> errorCodeDevice(1, 0);
+    int* const errorCode = nbody::deviceData(errorCodeDevice);
 
-    try
-    {
-        checkCuda(cudaMalloc(reinterpret_cast<void**>(&errorCodeDevice), sizeof(int)), "allocate octree construction error code");
-        checkCuda(cudaMemset(errorCodeDevice, 0, sizeof(int)), "initialize octree construction error code");
+    constexpr int threadsPerBlock = 256;
+    const int blocks = (plan.nRadixNodes + threadsPerBlock - 1) / threadsPerBlock;
 
-        constexpr int threadsPerBlock = 256;
-        const int blocks = (plan.nRadixNodes + threadsPerBlock - 1) / threadsPerBlock;
+    materializeSparseOctreeKernel<<<blocks, threadsPerBlock>>>(octreeView, radixTree.device_view(), groups.device_view(), plan.device_view(), errorCode);
 
-        materializeSparseOctreeKernel<<<blocks, threadsPerBlock>>>(octree, radixTree, groups, plan, errorCodeDevice);
+    checkCuda(cudaGetLastError(), "materializeSparseOctreeKernel launch");
+    checkCuda(cudaDeviceSynchronize(), "materializeSparseOctreeKernel execution");
 
-        checkCuda(cudaGetLastError(), "materializeSparseOctreeKernel launch");
-        checkCuda(cudaDeviceSynchronize(), "materializeSparseOctreeKernel execution");
+    int hostErrorCode = 0;
 
-        int errorCode = 0;
+    checkCuda(cudaMemcpy(&hostErrorCode, errorCode, sizeof(int), cudaMemcpyDeviceToHost), "copy octree construction error code");
 
-        checkCuda(cudaMemcpy(&errorCode, errorCodeDevice, sizeof(int), cudaMemcpyDeviceToHost), "copy octree construction error code");
-
-        if (errorCode != 0)
-            throw std::runtime_error(constructionErrorMessage(errorCode));
-
-        cudaFree(errorCodeDevice);
-        errorCodeDevice = nullptr;
-    }
-    catch (...)
-    {
-        cudaFree(errorCodeDevice);
-        throw;
-    }
+    if (hostErrorCode != 0)
+        throw std::runtime_error(constructionErrorMessage(hostErrorCode));
 
     octree.nParticles = groups.nParticles;
     octree.nLeaves = groups.nGroups;
@@ -370,41 +352,5 @@ void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const Mort
 
 void freeOctree(Octree& octree)
 {
-    cudaFree(octree.children);
-    cudaFree(octree.parent);
-    cudaFree(octree.level);
-    cudaFree(octree.prefix);
-    cudaFree(octree.firstParticle);
-    cudaFree(octree.particleCount);
-    cudaFree(octree.mass);
-    cudaFree(octree.comX);
-    cudaFree(octree.comY);
-    cudaFree(octree.comZ);
-    cudaFree(octree.centerX);
-    cudaFree(octree.centerY);
-    cudaFree(octree.centerZ);
-    cudaFree(octree.halfSize);
-    cudaFree(octree.pendingChildren);
-    cudaFree(octree.childCount);
-
-    octree.children = nullptr;
-    octree.parent = nullptr;
-    octree.level = nullptr;
-    octree.prefix = nullptr;
-    octree.firstParticle = nullptr;
-    octree.particleCount = nullptr;
-    octree.mass = nullptr;
-    octree.comX = nullptr;
-    octree.comY = nullptr;
-    octree.comZ = nullptr;
-    octree.centerX = nullptr;
-    octree.centerY = nullptr;
-    octree.centerZ = nullptr;
-    octree.halfSize = nullptr;
-    octree.pendingChildren = nullptr;
-    octree.childCount = nullptr;
-    octree.nParticles = 0;
-    octree.nLeaves = 0;
-    octree.nNodes = 0;
-    octree.root = -1;
+    octree = {};
 }

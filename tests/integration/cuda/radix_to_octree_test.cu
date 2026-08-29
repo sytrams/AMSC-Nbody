@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "cuda_test.hpp"
+#include "device_array.hpp"
 #include "morton_leaf_groups.hpp"
 #include "radix_to_octree.hpp"
 #include "tree_builder.hpp"
@@ -27,62 +28,6 @@ void checkCuda(
     }
 }
 
-
-template <typename T>
-class DeviceArray
-{
-public:
-    explicit DeviceArray(
-        const std::vector<T>& host)
-        : size_(host.size())
-    {
-        if (size_ == 0)
-            return;
-
-        checkCuda(
-            cudaMalloc(
-                reinterpret_cast<void**>(&data_),
-                size_ * sizeof(T)),
-            "cudaMalloc DeviceArray");
-
-        try
-        {
-            checkCuda(
-                cudaMemcpy(
-                    data_,
-                    host.data(),
-                    size_ * sizeof(T),
-                    cudaMemcpyHostToDevice),
-                "copy DeviceArray to device");
-        }
-        catch (...)
-        {
-            cudaFree(data_);
-            data_ = nullptr;
-            throw;
-        }
-    }
-
-    ~DeviceArray()
-    {
-        cudaFree(data_);
-    }
-
-    DeviceArray(
-        const DeviceArray&) = delete;
-
-    DeviceArray& operator=(
-        const DeviceArray&) = delete;
-
-    const T* get() const noexcept
-    {
-        return data_;
-    }
-
-private:
-    T* data_ = nullptr;
-    std::size_t size_ = 0;
-};
 
 void runExactCase(
     const std::string& name,
@@ -165,7 +110,7 @@ void runExactCase(
         checkCuda(
             cudaMemcpy(
                 actualLevels.data(),
-                plan.radixLevel,
+                nbody::deviceData(plan.radixLevel),
                 bytes,
                 cudaMemcpyDeviceToHost),
             "copy radix levels");
@@ -173,7 +118,7 @@ void runExactCase(
         checkCuda(
             cudaMemcpy(
                 actualCounts.data(),
-                plan.edgeNodeCount,
+                nbody::deviceData(plan.edgeNodeCount),
                 bytes,
                 cudaMemcpyDeviceToHost),
             "copy edge counts");
@@ -181,7 +126,7 @@ void runExactCase(
         checkCuda(
             cudaMemcpy(
                 actualOffsets.data(),
-                plan.edgeNodeOffset,
+                nbody::deviceData(plan.edgeNodeOffset),
                 bytes,
                 cudaMemcpyDeviceToHost),
             "copy edge offsets");
