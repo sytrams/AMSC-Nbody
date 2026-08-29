@@ -196,7 +196,7 @@ void buildRadixToOctreePlan(RadixToOctreePlan& plan, const Tree& radixTree, cons
     if (groups.nGroups != radixTree.nLeaves)
         throw std::invalid_argument("Morton group count does not match radix-tree leaf count");
 
-    if (groups.uniqueKeys == nullptr)
+    if (groups.uniqueKeys.data() == nullptr)
         throw std::logic_error("Morton unique keys are not allocated");
 
     if (radixTree.parent == nullptr)
@@ -221,7 +221,7 @@ void buildRadixToOctreePlan(RadixToOctreePlan& plan, const Tree& radixTree, cons
 
     const int blocks =(plan.nRadixNodes + threadsPerBlock - 1) / threadsPerBlock;
 
-    computeRadixToOctreePlanKernel<<<blocks, threadsPerBlock>>>(radixTree, groups.uniqueKeys, plan.nRadixNodes, plan.radixLevel, plan.edgeNodeCount, plan.errorCodeDevice);
+    computeRadixToOctreePlanKernel<<<blocks, threadsPerBlock>>>(radixTree, groups.uniqueKeys.data(), plan.nRadixNodes, plan.radixLevel, plan.edgeNodeCount, plan.errorCodeDevice);
 
     checkCuda(cudaGetLastError(), "computeRadixToOctreePlanKernel launch");
     checkCuda(cudaDeviceSynchronize(), "computeRadixToOctreePlanKernel execution");
