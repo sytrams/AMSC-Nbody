@@ -168,7 +168,7 @@ void Simulation::rebuildSpatialStructure() {
   // intermediate CUDA allocations if construction throws.
   releaseSpatialResources(groups_, radixTree_, plan_, octree_);
 
-  groups_ = staged.groups;
+  groups_ = std::move(staged.groups);
   staged.groups = {};
   radixTree_ = staged.radixTree;
   staged.radixTree = {};
