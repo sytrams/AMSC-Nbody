@@ -42,7 +42,8 @@ gtest_discover_tests(
 if(TARGET nbody::streaming)
     add_executable(
         nbody_streaming_unit_tests
-        unit/cpu/streaming_frame_test.cpp)
+        unit/cpu/streaming_frame_test.cpp
+        unit/cpu/streaming_network_test.cpp)
     set_target_properties(
         nbody_streaming_unit_tests
         PROPERTIES CXX_SCAN_FOR_MODULES OFF)
@@ -64,6 +65,17 @@ endif()
 # when both Python and that optional runtime dependency are available.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME "cpu.ClusterStreamLauncherTest"
+        COMMAND
+            ${Python3_EXECUTABLE}
+            "${PROJECT_SOURCE_DIR}/tests/unit/python/run_cluster_stream_test.py")
+    set_tests_properties(
+        "cpu.ClusterStreamLauncherTest"
+        PROPERTIES
+            LABELS "cpu-unit"
+            TIMEOUT 30)
+
     execute_process(
         COMMAND ${Python3_EXECUTABLE} -c "import numpy"
         RESULT_VARIABLE nbody_numpy_import_status

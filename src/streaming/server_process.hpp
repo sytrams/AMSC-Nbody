@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <iosfwd>
+#include <optional>
 
 #include "streaming/network.hpp"
 
@@ -13,7 +14,9 @@ namespace nbody::streaming {
 class ServerProcess {
 public:
   ServerProcess(const std::filesystem::path &executable,
-                const ServerConfig &config, std::ostream &log);
+                const ServerConfig &config,
+                const std::optional<RelaySourceConfig> &relayConfig,
+                std::ostream &log);
   ~ServerProcess() noexcept;
 
   ServerProcess(const ServerProcess &) = delete;

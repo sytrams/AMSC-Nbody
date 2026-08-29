@@ -25,8 +25,9 @@
 
 namespace nbody::streaming {
 
-ServerProcess::ServerProcess(const std::filesystem::path &executable,
-                             const ServerConfig &config, std::ostream &log) {
+ServerProcess::ServerProcess(
+    const std::filesystem::path &executable, const ServerConfig &config,
+    const std::optional<RelaySourceConfig> &relayConfig, std::ostream &log) {
   if (executable.empty())
     throw std::invalid_argument("Streaming server executable path is empty");
 
@@ -35,16 +36,31 @@ ServerProcess::ServerProcess(const std::filesystem::path &executable,
   const std::string portText = std::to_string(config.port);
   const std::string pollText = std::to_string(config.pollInterval.count());
 
+  std::vector<std::string> arguments{executableText, "--spool-dir", spoolText,
+                                     "--poll-ms", pollText};
+  if (relayConfig) {
+    arguments.insert(arguments.end(),
+                     {"--relay-host", relayConfig->host, "--relay-port",
+                      std::to_string(relayConfig->port), "--relay-token-file",
+                      relayConfig->tokenFile.string(), "--reconnect-ms",
+                      std::to_string(relayConfig->reconnectInterval.count())});
+  } else {
+    arguments.insert(arguments.end(),
+                     {"--bind", config.bindAddress, "--port", portText});
+  }
+
   const pid_t child = ::fork();
   if (child < 0)
     throw std::runtime_error("Could not fork streaming server: " +
                              std::string(std::strerror(errno)));
 
   if (child == 0) {
-    ::execl(executableText.c_str(), executableText.c_str(), "--spool-dir",
-            spoolText.c_str(), "--bind", config.bindAddress.c_str(), "--port",
-            portText.c_str(), "--poll-ms", pollText.c_str(),
-            static_cast<char *>(nullptr));
+    std::vector<char *> argumentPointers;
+    argumentPointers.reserve(arguments.size() + 1);
+    for (auto &argument : arguments)
+      argumentPointers.push_back(argument.data());
+    argumentPointers.push_back(nullptr);
+    ::execv(executableText.c_str(), argumentPointers.data());
     const std::string message = "Could not start N-body stream server '" +
                                 executableText + "': " + std::strerror(errno) +
                                 "\n";
@@ -94,13 +110,13 @@ ServerProcess::~ServerProcess() noexcept {
   (void)::waitpid(child, &status, 0);
 }
 
-std::filesystem::path defaultServerExecutable(
-    const std::filesystem::path &simulationExecutable) {
+std::filesystem::path
+defaultServerExecutable(const std::filesystem::path &simulationExecutable) {
   std::filesystem::path runningExecutable = simulationExecutable;
 #if defined(__linux__)
   std::array<char, 4096> executablePath{};
-  const ssize_t pathBytes =
-      ::readlink("/proc/self/exe", executablePath.data(), executablePath.size());
+  const ssize_t pathBytes = ::readlink("/proc/self/exe", executablePath.data(),
+                                       executablePath.size());
   if (pathBytes > 0)
     runningExecutable =
         std::string(executablePath.data(), static_cast<std::size_t>(pathBytes));

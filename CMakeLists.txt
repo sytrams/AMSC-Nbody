@@ -122,6 +122,14 @@ if(NBODY_BUILD_STREAMING)
     set_target_properties(
         nbody_stream_server PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 
+    add_executable(nbody_stream_relay apps/stream_relay/main.cpp)
+    target_link_libraries(nbody_stream_relay PRIVATE nbody::streaming)
+    target_compile_options(
+        nbody_stream_relay
+        PRIVATE -Wall -Wextra -Wpedantic)
+    set_target_properties(
+        nbody_stream_relay PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+
     add_executable(nbody_stream_client apps/stream_client/main.cpp)
     target_link_libraries(nbody_stream_client PRIVATE nbody::streaming)
     target_compile_options(
@@ -195,9 +203,23 @@ endif()
 # and Apple frameworks are requested only when this target can actually build.
 if(APPLE AND NBODY_BUILD_VIEWER)
     enable_language(OBJCXX)
-    add_executable(nbody_viewer apps/viewer/main.mm)
+    add_executable(
+        nbody_viewer
+        apps/viewer/main.mm
+        src/streaming/frame.cpp)
     target_include_directories(nbody_viewer PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_features(nbody_viewer PRIVATE cxx_std_23)
+    target_compile_definitions(
+        nbody_viewer
+        PRIVATE
+            NBODY_VIEWER_SHADER_PATH="${PROJECT_SOURCE_DIR}/apps/viewer/renderer.metal")
+    target_compile_options(
+        nbody_viewer
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_link_libraries(
         nbody_viewer
         PRIVATE

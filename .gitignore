@@ -37,8 +37,12 @@ build*/
 *.app
 nbody-stream/
 nbody-frames/
+received-frames/
 *.nbsnap
 *.nbsnap.part
+/.nbody-stream-token
+/.cache/solar_system/
+/data/solar_system/
 
 #vscode
 .vscode

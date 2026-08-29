@@ -67,7 +67,7 @@ void writeHeader(std::ostream &output, const FrameHeader &header) {
   output.write(kFrameMagic.data(),
                static_cast<std::streamsize>(kFrameMagic.size()));
   writeLittleEndian(output, header.version);
-  writeLittleEndian(output, static_cast<std::uint32_t>(kFrameHeaderBytes));
+  writeLittleEndian(output, header.headerBytes);
   writeLittleEndian(output, header.sequence);
   writeLittleEndian(output, header.simulationStep);
   writeDouble(output, header.simulationTime);
@@ -76,6 +76,8 @@ void writeHeader(std::ostream &output, const FrameHeader &header) {
   writeLittleEndian(output, header.scalarBytes);
   writeLittleEndian(output, header.components);
   writeLittleEndian(output, header.payloadBytes);
+  if (header.version >= 2)
+    writeLittleEndian(output, header.totalSteps);
 }
 
 std::string makeSessionId() {
@@ -169,11 +171,24 @@ FrameSpool::writePositions(std::uint64_t sequence,
                            double simulationTime, std::size_t particleCount,
                            const PositionChunkReader &reader,
                            std::size_t sourceParticleCount) const {
+  return writeTypedPositions(sequence, simulationStep, simulationTime, 0,
+                             particleCount, reader, {}, sourceParticleCount);
+}
+
+std::filesystem::path FrameSpool::writeTypedPositions(
+    std::uint64_t sequence, std::uint64_t simulationStep,
+    double simulationTime, std::uint64_t totalSteps,
+    std::size_t particleCount, const PositionChunkReader &positionReader,
+    const ParticleTypeChunkReader &typeReader,
+    std::size_t sourceParticleCount) const {
   if (!std::isfinite(simulationTime) || simulationTime < 0.0)
     throw std::invalid_argument("Frame simulation time is invalid");
+  if (typeReader && totalSteps < simulationStep)
+    throw std::invalid_argument(
+        "Frame total step count cannot be smaller than its current step");
   if (particleCount == 0)
     throw std::invalid_argument("Cannot write an empty position frame");
-  if (!reader)
+  if (!positionReader)
     throw std::invalid_argument("Position frame reader is not callable");
   if (sourceParticleCount == 0)
     sourceParticleCount = particleCount;
@@ -186,18 +201,19 @@ FrameSpool::writePositions(std::uint64_t sequence,
     throw std::overflow_error("Position frame payload is too large");
   }
 
-  const auto payloadBytes =
+  const auto positionBytes =
       static_cast<std::uint64_t>(particleCount) * kPositionComponents *
       sizeof(float);
-  const FrameHeader header{1,
-                           sequence,
-                           simulationStep,
-                           simulationTime,
-                           static_cast<std::uint64_t>(sourceParticleCount),
-                           static_cast<std::uint64_t>(particleCount),
-                           sizeof(float),
-                           kPositionComponents,
-                           payloadBytes};
+  FrameHeader header;
+  header.version = typeReader ? 2 : 1;
+  header.headerBytes = typeReader ? kFrameHeaderBytes : kLegacyFrameHeaderBytes;
+  header.sequence = sequence;
+  header.simulationStep = simulationStep;
+  header.simulationTime = simulationTime;
+  header.sourceParticleCount = sourceParticleCount;
+  header.particleCount = particleCount;
+  header.payloadBytes = positionBytes + (typeReader ? particleCount : 0);
+  header.totalSteps = typeReader ? totalSteps : 0;
 
   const std::filesystem::path finalPath =
       directory_ / makeFrameName(sessionId_, sequence);
@@ -223,7 +239,7 @@ FrameSpool::writePositions(std::uint64_t sequence,
     for (std::size_t offset = 0; offset < particleCount;) {
       const std::size_t count =
           std::min(kFrameChunkParticles, particleCount - offset);
-      reader(offset, count, positions.data());
+      positionReader(offset, count, positions.data());
 #if defined(__BYTE_ORDER__) && __BYTE_ORDER__ == __ORDER_BIG_ENDIAN__
       for (std::size_t valueIndex = 0;
            valueIndex < count * kPositionComponents; ++valueIndex) {
@@ -243,6 +259,23 @@ FrameSpool::writePositions(std::uint64_t sequence,
         throw std::runtime_error("Failed while writing frame payload: " +
                                  temporaryPath.string());
       offset += count;
+    }
+
+    if (typeReader) {
+      std::vector<std::uint8_t> types(
+          std::min(kFrameChunkParticles, particleCount));
+      for (std::size_t offset = 0; offset < particleCount;) {
+        const std::size_t count =
+            std::min(kFrameChunkParticles, particleCount - offset);
+        typeReader(offset, count, types.data());
+        output.write(reinterpret_cast<const char *>(types.data()),
+                     static_cast<std::streamsize>(count));
+        if (!output)
+          throw std::runtime_error(
+              "Failed while writing frame particle types: " +
+              temporaryPath.string());
+        offset += count;
+      }
     }
 
     output.flush();
@@ -278,7 +311,7 @@ FrameHeader readFrameHeader(const std::filesystem::path &framePath) {
 
   FrameHeader header;
   header.version = readLittleEndian<std::uint32_t>(input);
-  const auto headerBytes = readLittleEndian<std::uint32_t>(input);
+  header.headerBytes = readLittleEndian<std::uint32_t>(input);
   header.sequence = readLittleEndian<std::uint64_t>(input);
   header.simulationStep = readLittleEndian<std::uint64_t>(input);
   header.simulationTime = readDouble(input);
@@ -287,26 +320,39 @@ FrameHeader readFrameHeader(const std::filesystem::path &framePath) {
   header.scalarBytes = readLittleEndian<std::uint32_t>(input);
   header.components = readLittleEndian<std::uint32_t>(input);
   header.payloadBytes = readLittleEndian<std::uint64_t>(input);
+  if (header.version >= 2)
+    header.totalSteps = readLittleEndian<std::uint64_t>(input);
 
   const bool payloadWouldOverflow =
       header.particleCount >
       std::numeric_limits<std::uint64_t>::max() /
           (kPositionComponents * sizeof(float));
-  if (header.version != 1 || headerBytes != kFrameHeaderBytes ||
-      header.scalarBytes != sizeof(float) ||
+  const auto positionBytes =
+      payloadWouldOverflow
+          ? 0
+          : header.particleCount * kPositionComponents * sizeof(float);
+  const bool legacyHeader =
+      header.version == 1 &&
+      header.headerBytes == kLegacyFrameHeaderBytes &&
+      header.payloadBytes == positionBytes;
+  const bool typedHeader =
+      header.version == 2 && header.headerBytes == kFrameHeaderBytes &&
+      header.particleCount <=
+          std::numeric_limits<std::uint64_t>::max() - positionBytes &&
+      header.payloadBytes == positionBytes + header.particleCount &&
+      header.totalSteps >= header.simulationStep;
+  if ((!legacyHeader && !typedHeader) || header.scalarBytes != sizeof(float) ||
       header.components != kPositionComponents || header.particleCount == 0 ||
       header.sourceParticleCount < header.particleCount ||
       !std::isfinite(header.simulationTime) || header.simulationTime < 0.0 ||
-      payloadWouldOverflow ||
-      header.payloadBytes != header.particleCount * header.components *
-                                 header.scalarBytes) {
+      payloadWouldOverflow) {
     throw std::runtime_error("Unsupported or inconsistent N-body frame header: " +
                              framePath.string());
   }
 
   std::error_code error;
   const auto actualBytes = std::filesystem::file_size(framePath, error);
-  if (error || actualBytes != kFrameHeaderBytes + header.payloadBytes)
+  if (error || actualBytes != header.headerBytes + header.payloadBytes)
     throw std::runtime_error("N-body frame size does not match its header: " +
                              framePath.string());
   return header;

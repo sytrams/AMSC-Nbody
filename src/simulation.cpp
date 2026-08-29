@@ -1,9 +1,12 @@
 #include "simulation.hpp"
 
 #include <cmath>
+#include <chrono>
+#include <iostream>
 #include <limits>
 #include <memory>
 #include <stdexcept>
+#include <string_view>
 #include <utility>
 
 #include "barnes_hut.hpp"
@@ -40,6 +43,23 @@ int checkedParticleCount(std::size_t count) {
     throw std::overflow_error("Particle count exceeds the tree representation");
 
   return static_cast<int>(count);
+}
+
+template <typename Action>
+void runStage(bool profile, std::string_view name, Action &&action) {
+  if (!profile) {
+    std::forward<Action>(action)();
+    return;
+  }
+
+  std::clog << "[nbody profile] begin " << name << '\n' << std::flush;
+  const auto start = std::chrono::steady_clock::now();
+  std::forward<Action>(action)();
+  const std::chrono::duration<double> elapsed =
+      std::chrono::steady_clock::now() - start;
+  std::clog << "[nbody profile] " << name << ": " << elapsed.count()
+            << " seconds\n"
+            << std::flush;
 }
 
 void releaseSpatialResources(MortonLeafGroups &groups, Tree &radixTree,
@@ -80,13 +100,17 @@ void Simulation::initialize() {
     throw std::logic_error("Simulation can only be initialized once");
 
   try {
-    deviceState_ = nbody::detail::createSimulationDeviceState(
-        particles_.device_view().count);
-    rebuildSpatialStructure();
+    runStage(config_.profileStages, "initialize device state", [&] {
+      deviceState_ = nbody::detail::createSimulationDeviceState(
+          particles_.device_view().count);
+    });
+    runStage(config_.profileStages, "initialize spatial structure",
+             [&] { rebuildSpatialStructure(); });
 
     // computeAccelerations writes the next buffers. Promote them to the
     // current acceleration before the first leapfrog step.
-    computeAccelerations();
+    runStage(config_.profileStages, "initialize acceleration",
+             [&] { computeAccelerations(); });
     nbody::detail::swapAccelerationBuffers(*deviceState_);
 
     state_ = State::ready;
@@ -102,10 +126,14 @@ void Simulation::step() {
     throw std::logic_error("Simulation must be initialized before stepping");
 
   try {
-    updatePositions();
-    rebuildSpatialStructure();
-    computeAccelerations();
-    updateVelocities();
+    runStage(config_.profileStages, "step position update",
+             [&] { updatePositions(); });
+    runStage(config_.profileStages, "step spatial structure",
+             [&] { rebuildSpatialStructure(); });
+    runStage(config_.profileStages, "step acceleration",
+             [&] { computeAccelerations(); });
+    runStage(config_.profileStages, "step velocity update",
+             [&] { updateVelocities(); });
     nbody::detail::swapAccelerationBuffers(*deviceState_);
 
     time_ += config_.timeStep;

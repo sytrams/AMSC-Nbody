@@ -86,16 +86,63 @@ enables graphical snapshots.
 
 ## Headless cluster frame streaming
 
-The graphical output path consists of three pieces:
+A complete four-terminal walkthrough is available in
+[STREAMING_TUTORIAL.md](STREAMING_TUTORIAL.md).
+
+After the one-time cluster build and token setup, the entire run can instead be
+started from one Mac terminal. The launcher requests SSH authentication once,
+reuses that connection, submits the PBS GPU job, and manages the relay, tunnel,
+local client, and native Metal viewer:
+
+```bash
+./scripts/run-cluster-stream.py \
+  --input data/two_body.bin \
+  --steps 1000000 \
+  --stream-max-particles 2
+```
+
+The viewer is built incrementally and opened automatically. It follows the
+newest fully downloaded frame in `--output-dir`; no second command or manual
+file selection is needed. When the stream ends, the window stays open and
+loops the frames from that run. A later command using the same output directory
+reuses the window and switches it back to live mode instead of opening a
+duplicate. While the launcher is active, it prevents idle system sleep on
+macOS so the VPN and SSH tunnel stay connected, but it still allows the display
+to sleep normally. Drag to rotate, use two-finger scrolling or the arrow keys
+to pan, and pinch or use `+`/`-` to zoom. Click a particle to follow its sampled
+slot across frames, press Escape to release it, `F` to fit the current system,
+or `R` to reset rotation. Add `--no-viewer` when only frame download is wanted.
+Use `--viewer-replay-fps` to change replay speed or
+`--close-viewer-on-exit` for the old close-on-exit behavior. On `Ctrl+C`, the
+launcher stops the local streaming client but leaves the viewer replaying,
+verifies cancellation of its PBS job, force-deletes a stuck job, and reconnects
+to `login01` for final cleanup if the original multiplexed SSH connection is
+no longer usable.
+
+Run `./scripts/run-cluster-stream.py --help` for dataset, simulation, PBS,
+spool, viewer, and output options. `--dry-run` prints the generated PBS script
+without connecting to the cluster.
+
+The graphical output path consists of five pieces:
 
 - `nbody` samples completed particle states at a maximum of 60 wall-clock Hz
   and atomically publishes position frames into a durable spool directory.
-- `nbody_stream_server` watches that directory and streams its ordered backlog
-  over TCP. It removes a frame only after the client acknowledges the exact
-  complete file.
+- `nbody_stream_server` watches that directory and streams its ordered backlog.
+  In cluster mode it connects outward to the login-node relay, which works even
+  when the cluster firewall blocks connections into compute nodes. It removes a
+  frame only after the client acknowledges the exact complete file.
+- `nbody_stream_relay` runs on the login node. It authenticates compute sources
+  with a private token file and exposes its client listener only on loopback by
+  default, ready for an SSH tunnel.
 - `nbody_stream_client` saves each download with a `.part` suffix, atomically
   renames it when complete, and then acknowledges it. Follow mode reconnects
-  after a network interruption.
+  after a network interruption. It also atomically updates a small
+  `.nbody-latest` marker after validating each frame.
+- `nbody_viewer` follows that marker and uploads the interleaved XYZ positions
+  to a shared Metal vertex buffer. It renders sampled particles directly on
+  the Mac and keeps navigation responsive while frames continue to arrive. A
+  `.nbody-stream-state` marker separates repeated runs in the same directory;
+  after an `ended` transition, only the most recent session is replayed.
 
 The sampler always writes the initial and final states. Between them it emits
 at most one frame every `1 / sample-rate` wall-clock seconds and only after a
@@ -104,6 +151,12 @@ frames when a step itself takes longer than 1/60 second. To keep large runs
 viewable, each frame contains an evenly spaced, deterministic sample of at most
 100,000 particle indices by default. Use `--stream-max-particles N` to change
 that limit or `--stream-max-particles 0` to send every particle.
+If a large run remains on frame zero, add `--profile-stages` to print separate
+spatial-tree and force-traversal timings in the final PBS output.
+On normal completion, the compute source waits up to 30 seconds for the client
+to acknowledge its final backlog before exiting. Change this with
+`--stream-drain-seconds`; frames that do not drain remain durable in the remote
+spool rather than being deleted.
 
 Streaming targets are built by default. A client-only build does not require
 CUDA:
@@ -118,11 +171,27 @@ cmake -S . -B build/client -G Ninja \
 cmake --build build/client --target nbody_stream_client --parallel
 ```
 
-On the cluster, `--cluster` enables frames and starts the server that was built
-beside the simulator:
+Create a private token once on storage shared by the login and compute nodes:
 
 ```bash
-./build/simulation/nbody \
+./scripts/create-stream-token.sh "$PWD/.nbody-stream-token"
+```
+
+Start the relay on the login node. A cluster build may be reused by setting the
+executable explicitly:
+
+```bash
+NBODY_RELAY_TOKEN_FILE="$PWD/.nbody-stream-token" \
+NBODY_SKIP_BUILD=1 \
+NBODY_RELAY_EXECUTABLE="$PWD/build/cluster-relay/nbody_stream_relay" \
+./scripts/run-stream-relay.sh
+```
+
+On a GPU node, `--cluster` enables frames and starts the server built beside the
+simulator. Relay mode makes that child connect outward automatically:
+
+```bash
+./build/cluster-relay/nbody \
   --input data/initial.bin \
   --time-step 0.001 \
   --steps 100000 \
@@ -130,27 +199,29 @@ beside the simulator:
   --stream-dir "$SCRATCH/nbody-frames-$SLURM_JOB_ID" \
   --sample-rate 60 \
   --stream-max-particles 100000 \
-  --stream-bind 127.0.0.1 \
-  --stream-port 4747
+  --stream-relay-host login01 \
+  --stream-relay-port 4748 \
+  --stream-relay-token-file "$PWD/.nbody-stream-token"
 ```
 
 The automatically started server exits with the simulator, but every
-unacknowledged `.nbsnap` file stays in the spool. To retrieve a backlog after
-the simulation has ended, start the server explicitly:
+unacknowledged `.nbsnap` file stays in the spool. When that spool is on shared
+storage, retrieve it later by starting the server on the login node as another
+authenticated relay source:
 
 ```bash
-./build/simulation/nbody_stream_server \
-  --spool-dir "$SCRATCH/nbody-frames-$SLURM_JOB_ID" \
-  --bind 127.0.0.1 \
-  --port 4747
+./build/cluster-relay/nbody_stream_server \
+  --spool-dir "$NBODY_SPOOL" \
+  --relay-host 127.0.0.1 \
+  --relay-port 4748 \
+  --relay-token-file "$PWD/.nbody-stream-token"
 ```
 
-The default loopback binding deliberately exposes no unauthenticated cluster
-port. Forward it through SSH (using the login node as a jump host when the
-compute node requires one), then run the client locally:
+The relay's client listener defaults to login-node loopback. Forward it through
+SSH, then run the client locally:
 
 ```bash
-ssh -N -L 4747:127.0.0.1:4747 user@compute-node
+ssh -N -L 4747:127.0.0.1:4747 user@login-node
 
 ./build/client/nbody_stream_client \
   --host 127.0.0.1 \
@@ -159,16 +230,19 @@ ssh -N -L 4747:127.0.0.1:4747 user@compute-node
 ```
 
 The client follows new frames until interrupted. Add `--once` to download only
-the backlog present at connection time and exit. Direct remote access is also
-possible with `--stream-bind 0.0.0.0`, but it should be used only behind a
-cluster firewall because this initial transport intentionally relies on SSH
-for authentication and encryption.
+the backlog present at connection time and exit. If the relay or Mac is absent,
+the compute source retries and frames remain in the spool. The token file must
+remain mode `0600`; it authenticates the compute source and is never needed on
+the Mac. SSH authenticates and encrypts the login-node-to-Mac connection.
 
 The equivalent convenience wrappers configure and build their application if
 needed, then launch it with the defaults above:
 
 ```bash
-# On the cluster: serve the current job's persistent spool.
+# On the login node: run the authenticated relay.
+./scripts/run-stream-relay.sh
+
+# On a cluster node: serve a saved persistent spool.
 ./scripts/run-stream-server.sh
 
 # On the local computer: follow frames through the SSH tunnel.
@@ -179,7 +253,8 @@ needed, then launch it with the defaults above:
 ```
 
 Useful overrides include `NBODY_STREAM_HOST`, `NBODY_STREAM_PORT`,
-`NBODY_STREAM_SPOOL_DIR`, `NBODY_FRAME_OUTPUT_DIR`, and `NBODY_SKIP_BUILD=1`.
+`NBODY_STREAM_SPOOL_DIR`, `NBODY_STREAM_RELAY_HOST`,
+`NBODY_RELAY_TOKEN_FILE`, `NBODY_FRAME_OUTPUT_DIR`, and `NBODY_SKIP_BUILD=1`.
 The client defaults to `received-frames` in the project directory; the server
 defaults to `$SCRATCH/nbody-frames-$SLURM_JOB_ID` when those cluster variables
 are available.

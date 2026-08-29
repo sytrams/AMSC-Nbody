@@ -8,12 +8,14 @@
 
 namespace nbody::streaming {
 
-inline constexpr std::size_t kFrameHeaderBytes = 72;
+inline constexpr std::size_t kLegacyFrameHeaderBytes = 72;
+inline constexpr std::size_t kFrameHeaderBytes = 80;
 inline constexpr std::size_t kPositionComponents = 3;
 inline constexpr std::size_t kFrameChunkParticles = 1024 * 1024;
 
 struct FrameHeader {
-  std::uint32_t version = 1;
+  std::uint32_t version = 2;
+  std::uint32_t headerBytes = kFrameHeaderBytes;
   std::uint64_t sequence = 0;
   std::uint64_t simulationStep = 0;
   double simulationTime = 0.0;
@@ -22,6 +24,7 @@ struct FrameHeader {
   std::uint32_t scalarBytes = sizeof(float);
   std::uint32_t components = kPositionComponents;
   std::uint64_t payloadBytes = 0;
+  std::uint64_t totalSteps = 0;
 };
 
 // The callback fills `count * 3` interleaved xyz floats beginning at the
@@ -29,6 +32,9 @@ struct FrameHeader {
 // simulations do not need a second full-size host copy of every position.
 using PositionChunkReader =
     std::function<void(std::size_t offset, std::size_t count, float *xyz)>;
+
+using ParticleTypeChunkReader = std::function<void(
+    std::size_t offset, std::size_t count, std::uint8_t *types)>;
 
 class FrameSampler {
 public:
@@ -59,6 +65,13 @@ public:
                                        std::size_t particleCount,
                                        const PositionChunkReader &reader,
                                        std::size_t sourceParticleCount = 0) const;
+
+  std::filesystem::path writeTypedPositions(
+      std::uint64_t sequence, std::uint64_t simulationStep,
+      double simulationTime, std::uint64_t totalSteps,
+      std::size_t particleCount, const PositionChunkReader &positionReader,
+      const ParticleTypeChunkReader &typeReader,
+      std::size_t sourceParticleCount = 0) const;
 
 private:
   std::filesystem::path directory_;

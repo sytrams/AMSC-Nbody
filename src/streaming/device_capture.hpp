@@ -23,12 +23,14 @@ public:
   std::filesystem::path write(const FrameSpool &spool,
                               std::uint64_t sequence,
                               std::uint64_t simulationStep,
-                              double simulationTime) const;
+                              double simulationTime,
+                              std::uint64_t totalSteps) const;
 
 private:
   ConstDeviceParticlesView particles_{};
   std::size_t sampleParticleCount_ = 0;
   float *devicePositions_ = nullptr;
+  std::uint8_t *deviceTypes_ = nullptr;
 };
 
 } // namespace nbody::streaming

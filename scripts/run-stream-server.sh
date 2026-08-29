@@ -11,6 +11,10 @@ SPOOL_DIR=${NBODY_STREAM_SPOOL_DIR:-"${SCRATCH:-$PROJECT_DIR}/nbody-frames-${SLU
 BIND_ADDRESS=${NBODY_STREAM_BIND:-127.0.0.1}
 PORT=${NBODY_STREAM_PORT:-4747}
 POLL_MS=${NBODY_STREAM_POLL_MS:-100}
+RELAY_HOST=${NBODY_STREAM_RELAY_HOST:-}
+RELAY_PORT=${NBODY_STREAM_RELAY_PORT:-4748}
+RELAY_TOKEN_FILE=${NBODY_RELAY_TOKEN_FILE:-}
+RECONNECT_MS=${NBODY_STREAM_RECONNECT_MS:-1000}
 
 if [ "${NBODY_SKIP_BUILD:-0}" != "1" ]; then
   if [ ! -f "$BUILD_DIR/CMakeCache.txt" ]; then
@@ -45,9 +49,23 @@ fi
 mkdir -p "$SPOOL_DIR"
 
 echo "Serving frames from $SPOOL_DIR"
-echo "Listening on $BIND_ADDRESS:$PORT"
+if [ -n "$RELAY_HOST" ]; then
+  if [ -z "$RELAY_TOKEN_FILE" ]; then
+    echo "NBODY_RELAY_TOKEN_FILE is required with NBODY_STREAM_RELAY_HOST." >&2
+    exit 2
+  fi
+  echo "Connecting outward to relay $RELAY_HOST:$RELAY_PORT"
+  exec "$SERVER" \
+    --spool-dir "$SPOOL_DIR" \
+    --poll-ms "$POLL_MS" \
+    --relay-host "$RELAY_HOST" \
+    --relay-port "$RELAY_PORT" \
+    --relay-token-file "$RELAY_TOKEN_FILE" \
+    --reconnect-ms "$RECONNECT_MS" \
+    "$@"
+fi
 
-# Additional arguments are placed last and can override the defaults.
+echo "Listening on $BIND_ADDRESS:$PORT"
 exec "$SERVER" \
   --spool-dir "$SPOOL_DIR" \
   --bind "$BIND_ADDRESS" \

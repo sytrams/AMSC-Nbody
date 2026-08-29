@@ -19,6 +19,7 @@ struct SimulationConfig {
   double timeStep;
   double theta;
   double softening;
+  bool profileStages = false;
 };
 
 class Simulation {
