@@ -389,6 +389,7 @@ jobs:
         shell: bash
         env:
           RUN_KEY: ${{ github.run_id }}-${{ github.run_attempt }}
+          COMMIT_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
 
@@ -421,7 +422,7 @@ jobs:
             -o ServerAliveInterval=15
             -o ServerAliveCountMax=3
           )
-          printf -v remote_arguments '%q ' "$RUN_KEY"
+          printf -v remote_arguments '%q ' "$RUN_KEY" "$COMMIT_SHA"
 
           results_path="$RUNNER_TEMP/cluster-test-results"
           mkdir -p "$results_path"
@@ -442,11 +443,18 @@ jobs:
           set -euo pipefail
 
           run_key="$1"
-          repository="$HOME/AMSC-Nbody-fresh"
-          results_dir="$repository/.ci-results/$run_key"
+          commit_sha="$2"
+          source_repository="$HOME/AMSC-Nbody-fresh"
+          repository="$HOME/.ci-worktrees/AMSC-Nbody/$run_key"
+          results_dir="$source_repository/.ci-results/$run_key"
           dispatch_file="$results_dir/pbs-dispatch.txt"
           submission_lock="$results_dir/pbs-submission.lock"
           mkdir -p "$results_dir"
+
+          if [[ ! "$commit_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Invalid commit SHA: $commit_sha" >&2
+            exit 1
+          fi
 
           if [[ -r /etc/profile.d/pbs.sh ]]; then
             set +u
@@ -483,8 +491,20 @@ jobs:
               job_id="$(read_job_id)"
 
               if [[ -z "$job_id" ]]; then
-                cd "$repository"
-                git pull --ff-only
+                # The shared source checkout may contain a user's local edits.
+                # Fetching is safe in a dirty checkout; build the requested
+                # commit in an isolated worktree instead of modifying it.
+                git -C "$source_repository" fetch origin main
+                git -C "$source_repository" cat-file -e "$commit_sha^{commit}"
+                mkdir -p "$(dirname "$repository")"
+
+                if [[ ! -e "$repository/.git" ]]; then
+                  git -C "$source_repository" worktree add \
+                    --detach "$repository" "$commit_sha"
+                elif [[ "$(git -C "$repository" rev-parse HEAD)" != "$commit_sha" ]]; then
+                  echo "Existing CI worktree has the wrong commit: $repository" >&2
+                  exit 1
+                fi
 
                 job_environment="NBODY_REPOSITORY=$repository"
                 job_environment+=",NBODY_RESULTS_DIR=$results_dir"
