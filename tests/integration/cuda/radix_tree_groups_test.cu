@@ -337,7 +337,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 treeMass.data(),
-                tree.mass,
+                tree.mass.data(),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(double),
                 cudaMemcpyDeviceToHost),
@@ -346,7 +346,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 treeComX.data(),
-                tree.comX,
+                tree.comX.data(),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(double),
                 cudaMemcpyDeviceToHost),
@@ -355,7 +355,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 treeComY.data(),
-                tree.comY,
+                tree.comY.data(),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(double),
                 cudaMemcpyDeviceToHost),
@@ -364,7 +364,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 treeComZ.data(),
-                tree.comZ,
+                tree.comZ.data(),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(double),
                 cudaMemcpyDeviceToHost),
@@ -422,7 +422,7 @@ void runCase(
         checkCuda(
             cudaMemcpy(
                 parent.data(),
-                tree.parent,
+                tree.parent.data(),
                 static_cast<std::size_t>(totalNodes) *
                     sizeof(int),
                 cudaMemcpyDeviceToHost),
@@ -451,7 +451,7 @@ void runCase(
             checkCuda(
                 cudaMemcpy(
                     rangeFirst.data(),
-                    tree.rangeFirst,
+                    tree.rangeFirst.data(),
                     static_cast<std::size_t>(
                         nLeaves - 1) *
                         sizeof(int),
@@ -461,7 +461,7 @@ void runCase(
             checkCuda(
                 cudaMemcpy(
                     rangeLast.data(),
-                    tree.rangeLast,
+                    tree.rangeLast.data(),
                     static_cast<std::size_t>(
                         nLeaves - 1) *
                         sizeof(int),
@@ -471,7 +471,7 @@ void runCase(
             checkCuda(
                 cudaMemcpy(
                     prefixLength.data(),
-                    tree.prefixLength,
+                    tree.prefixLength.data(),
                     static_cast<std::size_t>(
                         nLeaves - 1) *
                         sizeof(int),
@@ -481,7 +481,7 @@ void runCase(
             checkCuda(
                 cudaMemcpy(
                     visitCount.data(),
-                    tree.visitCount,
+                    tree.visitCount.data(),
                     static_cast<std::size_t>(
                         nLeaves - 1) *
                         sizeof(int),

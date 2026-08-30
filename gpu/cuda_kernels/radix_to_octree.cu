@@ -51,7 +51,7 @@ namespace
     }
 } // namespace
 
-__device__ int spatialPrefixLength(const Tree& radixTree, int radixNode)
+__device__ int spatialPrefixLength(const ConstTreeView& radixTree, int radixNode)
 {
     if (radixNode < radixTree.nLeaves)
         return kMortonSpatialBits;  // A radix leaf represents one complete Morton key
@@ -61,13 +61,13 @@ __device__ int spatialPrefixLength(const Tree& radixTree, int radixNode)
     return rawPrefix - kMortonPaddingBits;
 }
 
-__device__ int octreeLevelForRadixNode(const Tree& radixTree,int radixNode)
+__device__ int octreeLevelForRadixNode(const ConstTreeView& radixTree,int radixNode)
 {
     const int prefix = spatialPrefixLength(radixTree, radixNode);
     return prefix / kMortonDimensions;
 }
 
-__global__ void computeRadixToOctreePlanKernel(Tree radixTree, const std::uint32_t* uniqueKeys, int nRadixNodes, int* radixLevel, int* edgeNodeCount, int* errorCode)
+__global__ void computeRadixToOctreePlanKernel(ConstTreeView radixTree, const std::uint32_t* uniqueKeys, int nRadixNodes, int* radixLevel, int* edgeNodeCount, int* errorCode)
 {
     const int radixNode =static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -182,10 +182,10 @@ void buildRadixToOctreePlan(RadixToOctreePlan& plan, const Tree& radixTree, cons
     if (groups.uniqueKeys.data() == nullptr)
         throw std::logic_error("Morton unique keys are not allocated");
 
-    if (radixTree.parent == nullptr)
+    if (radixTree.parent.data() == nullptr)
         throw std::logic_error("Radix-tree parent array is not allocated");
 
-    if (radixTree.nLeaves > 1 && radixTree.prefixLength == nullptr)
+    if (radixTree.nLeaves > 1 && radixTree.prefixLength.data() == nullptr)
         throw std::logic_error("Radix-tree prefix metadata is not allocated");
 
     const int expectedRadixNodes = 2 * radixTree.nLeaves - 1;
@@ -204,7 +204,9 @@ void buildRadixToOctreePlan(RadixToOctreePlan& plan, const Tree& radixTree, cons
 
     const int blocks =(plan.nRadixNodes + threadsPerBlock - 1) / threadsPerBlock;
 
-    computeRadixToOctreePlanKernel<<<blocks, threadsPerBlock>>>(radixTree, groups.uniqueKeys.data(), plan.nRadixNodes, plan.radixLevel.data(), plan.edgeNodeCount.data(), plan.errorCodeDevice.data());
+    const ConstTreeView radixTreeView = radixTree.view();
+    
+    computeRadixToOctreePlanKernel<<<blocks, threadsPerBlock>>>(radixTreeView, groups.uniqueKeys.data(), plan.nRadixNodes, plan.radixLevel.data(), plan.edgeNodeCount.data(), plan.errorCodeDevice.data());
 
     checkCuda(cudaGetLastError(), "computeRadixToOctreePlanKernel launch");
     checkCuda(cudaDeviceSynchronize(), "computeRadixToOctreePlanKernel execution");

@@ -11,12 +11,25 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "cuda_test.hpp"
 #include "tree_builder.hpp"
 
 namespace {
+
+static_assert(
+    !std::is_copy_constructible_v<Tree>);
+
+static_assert(
+    !std::is_copy_assignable_v<Tree>);
+
+static_assert(
+    std::is_move_constructible_v<Tree>);
+
+static_assert(
+    std::is_move_assignable_v<Tree>);
 
 void cudaCheck(cudaError_t error, const char* expression, const char* file, int line)
 {
@@ -112,27 +125,27 @@ HostTree copyTreeToHost(const Tree& tree, int n, bool copyPhysicalData)
     const std::size_t totalCount = static_cast<std::size_t>(2 * n - 1);
 
     host.parent.resize(totalCount);
-    CUDA_CHECK(cudaMemcpy(host.parent.data(), tree.parent,
+    CUDA_CHECK(cudaMemcpy(host.parent.data(), tree.parent.data(),
                           totalCount * sizeof(int), cudaMemcpyDeviceToHost));
 
     if (n > 1)
     {
         host.left.resize(internalCount);
         host.right.resize(internalCount);
-        CUDA_CHECK(cudaMemcpy(host.left.data(), tree.left,
+        CUDA_CHECK(cudaMemcpy(host.left.data(), tree.left.data(),
                               internalCount * sizeof(int), cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(host.right.data(), tree.right,
+        CUDA_CHECK(cudaMemcpy(host.right.data(), tree.right.data(),
                               internalCount * sizeof(int), cudaMemcpyDeviceToHost));
 
         host.rangeFirst.resize(internalCount);
         host.rangeLast.resize(internalCount);
         host.prefixLength.resize(internalCount);
 
-        CUDA_CHECK(cudaMemcpy(host.rangeFirst.data(), tree.rangeFirst,
+        CUDA_CHECK(cudaMemcpy(host.rangeFirst.data(), tree.rangeFirst.data(),
                               internalCount * sizeof(int), cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(host.rangeLast.data(), tree.rangeLast,
+        CUDA_CHECK(cudaMemcpy(host.rangeLast.data(), tree.rangeLast.data(),
                               internalCount * sizeof(int), cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(host.prefixLength.data(), tree.prefixLength,
+        CUDA_CHECK(cudaMemcpy(host.prefixLength.data(), tree.prefixLength.data(),
                               internalCount * sizeof(int), cudaMemcpyDeviceToHost));
     }
 
@@ -143,19 +156,19 @@ HostTree copyTreeToHost(const Tree& tree, int n, bool copyPhysicalData)
         host.comY.resize(totalCount);
         host.comZ.resize(totalCount);
 
-        CUDA_CHECK(cudaMemcpy(host.mass.data(), tree.mass,
+        CUDA_CHECK(cudaMemcpy(host.mass.data(), tree.mass.data(),
                               totalCount * sizeof(double), cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(host.comX.data(), tree.comX,
+        CUDA_CHECK(cudaMemcpy(host.comX.data(), tree.comX.data(),
                               totalCount * sizeof(double), cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(host.comY.data(), tree.comY,
+        CUDA_CHECK(cudaMemcpy(host.comY.data(), tree.comY.data(),
                               totalCount * sizeof(double), cudaMemcpyDeviceToHost));
-        CUDA_CHECK(cudaMemcpy(host.comZ.data(), tree.comZ,
+        CUDA_CHECK(cudaMemcpy(host.comZ.data(), tree.comZ.data(),
                               totalCount * sizeof(double), cudaMemcpyDeviceToHost));
 
         if (n > 1)
         {
             host.visitCount.resize(internalCount);
-            CUDA_CHECK(cudaMemcpy(host.visitCount.data(), tree.visitCount,
+            CUDA_CHECK(cudaMemcpy(host.visitCount.data(), tree.visitCount.data(),
                                   internalCount * sizeof(int), cudaMemcpyDeviceToHost));
         }
     }

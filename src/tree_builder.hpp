@@ -17,4 +17,4 @@ void computeCenterOfMass(Tree& tree, const std::uint32_t* d_sortedIndices, const
 //nuova funzione da usare nella pipeline reale: una foglia = una chiave Morton = una o più particelle
 void computeGroupedCenterOfMass(Tree& tree, const MortonLeafGroups& groups, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ);
 
-void freeTree(Tree& tree);
+void freeTree(Tree& tree) noexcept;

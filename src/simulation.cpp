@@ -170,7 +170,7 @@ void Simulation::rebuildSpatialStructure() {
 
   groups_ = std::move(staged.groups);
   staged.groups = {};
-  radixTree_ = staged.radixTree;
+  radixTree_ = std::move(staged.radixTree);
   staged.radixTree = {};
   plan_ = std::move(staged.plan);
   staged.plan = {};
