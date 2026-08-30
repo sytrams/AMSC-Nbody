@@ -7,6 +7,7 @@
 #include <random>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "cuda_test.hpp"
@@ -16,6 +17,18 @@
 #include "tree_builder.hpp"
 
 namespace {
+
+static_assert(
+    !std::is_copy_constructible_v<Octree>);
+
+static_assert(
+    !std::is_copy_assignable_v<Octree>);
+
+static_assert(
+    std::is_move_constructible_v<Octree>);
+
+static_assert(
+    std::is_move_assignable_v<Octree>);
 
 void checkCuda(
     cudaError_t error,
@@ -143,7 +156,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.children.data(),
-            octree.children,
+            octree.children.data(),
             n * 8 * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy octree children");
@@ -151,7 +164,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.parent.data(),
-            octree.parent,
+            octree.parent.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy octree parent");
@@ -159,7 +172,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.level.data(),
-            octree.level,
+            octree.level.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy octree levels");
@@ -167,7 +180,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.prefix.data(),
-            octree.prefix,
+            octree.prefix.data(),
             n * sizeof(std::uint32_t),
             cudaMemcpyDeviceToHost),
         "copy octree prefixes");
@@ -175,7 +188,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.firstParticle.data(),
-            octree.firstParticle,
+            octree.firstParticle.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy firstParticle");
@@ -183,7 +196,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.particleCount.data(),
-            octree.particleCount,
+            octree.particleCount.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy particleCount");

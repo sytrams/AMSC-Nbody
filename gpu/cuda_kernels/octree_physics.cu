@@ -15,18 +15,6 @@ namespace
             throw std::runtime_error(std::string(operation) + " failed: " + cudaGetErrorString(error));
     }
 
-    template <typename T>
-    void allocateDeviceArray(T*& pointer, std::size_t count, const char* name)
-    {
-        if (count == 0)
-            return;
-
-        const cudaError_t error =cudaMalloc(reinterpret_cast<void**>(&pointer), count * sizeof(T));
-
-        if (error != cudaSuccess)
-            throw std::runtime_error(std::string("cudaMalloc ") + name + " failed: " + cudaGetErrorString(error));
-    }
-
     const char* physicsErrorMessage(int errorCode)
     {
         switch (errorCode)
@@ -73,7 +61,7 @@ namespace
     }
 } // namespace
 
-__global__ void countOctreeChildrenKernel(Octree octree, int* errorCode)
+__global__ void countOctreeChildrenKernel(OctreeView octree, int* errorCode)
 {
     const int node = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -104,7 +92,7 @@ __global__ void countOctreeChildrenKernel(Octree octree, int* errorCode)
         atomicCAS(errorCode, 0, 4);
 }
 
-__global__ void initializeOctreeLeavesKernel(Octree octree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, int* errorCode)
+__global__ void initializeOctreeLeavesKernel(OctreeView octree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, int* errorCode)
 {
     const int node = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -165,7 +153,7 @@ __global__ void initializeOctreeLeavesKernel(Octree octree, const std::uint32_t*
     }
 }
 
-__global__ void propagateOctreeMassKernel(Octree octree, int* errorCode)
+__global__ void propagateOctreeMassKernel(OctreeView octree, int* errorCode)
 {
     const int leaf = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -261,36 +249,32 @@ void allocateOctreePhysicalData(Octree& octree)
     if (octree.nNodes <= 0)
         throw std::invalid_argument("Octree topology must be allocated first");
 
-    if (octree.mass != nullptr || octree.comX != nullptr || octree.comY != nullptr || octree.comZ != nullptr || octree.pendingChildren != nullptr || octree.childCount != nullptr)
+    if (!octree.mass.empty() || !octree.comX.empty() || !octree.comY.empty() || !octree.comZ.empty() || !octree.pendingChildren.empty() || !octree.childCount.empty())
         throw std::logic_error("Octree physical data is already allocated");
 
     const std::size_t count = static_cast<std::size_t>(octree.nNodes);
 
     try
     {
-        allocateDeviceArray(octree.mass, count, "octree.mass");
-        allocateDeviceArray(octree.comX, count, "octree.comX");
-        allocateDeviceArray(octree.comY, count, "octree.comY");
-        allocateDeviceArray(octree.comZ, count, "octree.comZ");
-        allocateDeviceArray(octree.pendingChildren, count, "octree.pendingChildren");
-        allocateDeviceArray(octree.childCount, count, "octree.childCount");
+        octree.mass.allocate(count);
+
+        octree.comX.allocate(count);
+        octree.comY.allocate(count);
+        octree.comZ.allocate(count);
+
+        octree.pendingChildren.allocate(count);
+        octree.childCount.allocate(count);
     }
     catch (...)
     {
-        //freeOctree() already frees these arrays,but it also frees topology. Therefore release only what was allocated here if this function fails.
-        cudaFree(octree.mass);
-        cudaFree(octree.comX);
-        cudaFree(octree.comY);
-        cudaFree(octree.comZ);
-        cudaFree(octree.pendingChildren);
-        cudaFree(octree.childCount);
+        octree.mass.reset();
 
-        octree.mass = nullptr;
-        octree.comX = nullptr;
-        octree.comY = nullptr;
-        octree.comZ = nullptr;
-        octree.pendingChildren = nullptr;
-        octree.childCount = nullptr;
+        octree.comX.reset();
+        octree.comY.reset();
+        octree.comZ.reset();
+
+        octree.pendingChildren.reset();
+        octree.childCount.reset();
 
         throw;
     }
@@ -301,10 +285,10 @@ void computeOctreeMassAndCenterOfMass(Octree& octree, const std::uint32_t* d_sor
     if (octree.nParticles <= 0 || octree.nLeaves <= 0 || octree.nNodes <= 0 || octree.root != 0)
         throw std::logic_error("Octree topology is not valid");
 
-    if (octree.children == nullptr || octree.parent == nullptr || octree.firstParticle == nullptr || octree.particleCount == nullptr)
+    if (octree.children.data() == nullptr || octree.parent.data() == nullptr || octree.firstParticle.data() == nullptr || octree.particleCount.data() == nullptr)
         throw std::logic_error("Octree topology arrays are not allocated");
 
-    if (octree.mass == nullptr || octree.comX == nullptr || octree.comY == nullptr || octree.comZ == nullptr || octree.pendingChildren == nullptr || octree.childCount == nullptr)
+    if (octree.mass.data() == nullptr || octree.comX.data() == nullptr || octree.comY.data() == nullptr || octree.comZ.data() == nullptr || octree.pendingChildren.data() == nullptr || octree.childCount.data() == nullptr)
         throw std::logic_error("Octree physical arrays are not allocated");
 
     if (d_sortedIndices == nullptr)
@@ -315,51 +299,39 @@ void computeOctreeMassAndCenterOfMass(Octree& octree, const std::uint32_t* d_sor
 
     const std::size_t nodeBytes = static_cast<std::size_t>(octree.nNodes) * sizeof(double);
 
-    checkCuda(cudaMemset(octree.mass, 0, nodeBytes), "clear octree.mass");
-    checkCuda(cudaMemset(octree.comX, 0, nodeBytes), "clear octree.comX");
-    checkCuda(cudaMemset( octree.comY, 0, nodeBytes), "clear octree.comY");
-    checkCuda(cudaMemset(octree.comZ, 0, nodeBytes), "clear octree.comZ");
+    checkCuda(cudaMemset(octree.mass.data(), 0, nodeBytes), "clear octree.mass");
+    checkCuda(cudaMemset(octree.comX.data(), 0, nodeBytes), "clear octree.comX");
+    checkCuda(cudaMemset( octree.comY.data(), 0, nodeBytes), "clear octree.comY");
+    checkCuda(cudaMemset(octree.comZ.data(), 0, nodeBytes), "clear octree.comZ");
 
     const std::size_t integerNodeBytes = static_cast<std::size_t>(octree.nNodes) * sizeof(int);
 
-    checkCuda(cudaMemset(octree.pendingChildren, 0, integerNodeBytes), "clear octree.pendingChildren");
-    checkCuda(cudaMemset(octree.childCount, 0, integerNodeBytes), "clear octree.childCount");
+    checkCuda(cudaMemset(octree.pendingChildren.data(), 0, integerNodeBytes), "clear octree.pendingChildren");
+    checkCuda(cudaMemset(octree.childCount.data(), 0, integerNodeBytes), "clear octree.childCount");
     
-    int* errorCodeDevice = nullptr;
+    DeviceBuffer<int> errorCodeDevice(1);
 
-    try
-    {
-        checkCuda(cudaMalloc(reinterpret_cast<void**>(&errorCodeDevice), sizeof(int)), "allocate octree physics error code");
-        checkCuda(cudaMemset(errorCodeDevice, 0, sizeof(int)), "clear octree physics error code");
+    checkCuda(cudaMemset( errorCodeDevice.data(), 0, sizeof(int)), "clear octree physics error code");
 
-        constexpr int threadsPerBlock = 256;
+    constexpr int threadsPerBlock = 256;
 
-        const int blocks = (octree.nNodes + threadsPerBlock - 1) / threadsPerBlock;
+    const int blocks = (octree.nNodes + threadsPerBlock - 1) / threadsPerBlock;
 
-        //determine how many children every node has.
-        countOctreeChildrenKernel<<<blocks, threadsPerBlock>>>(octree, errorCodeDevice);
-        checkCuda(cudaGetLastError(), "countOctreeChildrenKernel launch");
-        checkCuda(cudaDeviceSynchronize(), "countOctreeChildrenKernel execution");
-        throwIfDeviceError(errorCodeDevice);
+    const OctreeView octreeView = octree.view();
+    //determine how many children every node has.
+    countOctreeChildrenKernel<<<blocks, threadsPerBlock>>>(octreeView, errorCodeDevice.data());
+    checkCuda(cudaGetLastError(), "countOctreeChildrenKernel launch");
+    checkCuda(cudaDeviceSynchronize(), "countOctreeChildrenKernel execution");
+    throwIfDeviceError(errorCodeDevice.data());
 
-        //initialize occupied leaves.
-        
-        initializeOctreeLeavesKernel<<<blocks, threadsPerBlock>>>( octree, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ, errorCodeDevice);
-        checkCuda(cudaGetLastError(), "initializeOctreeLeavesKernel launch");
-        checkCuda(cudaDeviceSynchronize(), "initializeOctreeLeavesKernel execution");
-        throwIfDeviceError(errorCodeDevice);
+    //initialize occupied leaves.
+    initializeOctreeLeavesKernel<<<blocks, threadsPerBlock>>>( octreeView, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ, errorCodeDevice.data());        checkCuda(cudaGetLastError(), "initializeOctreeLeavesKernel launch");
+    checkCuda(cudaDeviceSynchronize(), "initializeOctreeLeavesKernel execution");
+    throwIfDeviceError(errorCodeDevice.data());
 
-        //bottom-up mass/CoM aggregation.
-        propagateOctreeMassKernel<<<blocks, threadsPerBlock>>>(octree, errorCodeDevice);
-        checkCuda(cudaGetLastError(), "propagateOctreeMassKernel launch");
-        checkCuda(cudaDeviceSynchronize(), "propagateOctreeMassKernel execution");
-        throwIfDeviceError(errorCodeDevice);
-        cudaFree(errorCodeDevice);
-        errorCodeDevice = nullptr;
-    }
-    catch (...)
-    {
-        cudaFree(errorCodeDevice);
-        throw;
-    }
+    //bottom-up mass/CoM aggregation.
+    propagateOctreeMassKernel<<<blocks, threadsPerBlock>>>(octreeView, errorCodeDevice.data());
+    checkCuda(cudaGetLastError(), "propagateOctreeMassKernel launch");
+    checkCuda(cudaDeviceSynchronize(), "propagateOctreeMassKernel execution");
+    throwIfDeviceError(errorCodeDevice.data());
 }

@@ -175,7 +175,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.children.data(),
-            octree.children,
+            octree.children.data(),
             n * 8 * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy octree children");
@@ -183,7 +183,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.parent.data(),
-            octree.parent,
+            octree.parent.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy octree parent");
@@ -191,7 +191,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.level.data(),
-            octree.level,
+            octree.level.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy octree levels");
@@ -199,7 +199,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.prefix.data(),
-            octree.prefix,
+            octree.prefix.data(),
             n * sizeof(std::uint32_t),
             cudaMemcpyDeviceToHost),
         "copy octree prefixes");
@@ -207,7 +207,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.firstParticle.data(),
-            octree.firstParticle,
+            octree.firstParticle.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy firstParticle");
@@ -215,7 +215,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.particleCount.data(),
-            octree.particleCount,
+            octree.particleCount.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy particleCount");
@@ -223,7 +223,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.mass.data(),
-            octree.mass,
+            octree.mass.data(),
             n * sizeof(double),
             cudaMemcpyDeviceToHost),
         "copy octree mass");
@@ -231,7 +231,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.comX.data(),
-            octree.comX,
+            octree.comX.data(),
             n * sizeof(double),
             cudaMemcpyDeviceToHost),
         "copy octree comX");
@@ -239,7 +239,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.comY.data(),
-            octree.comY,
+            octree.comY.data(),
             n * sizeof(double),
             cudaMemcpyDeviceToHost),
         "copy octree comY");
@@ -247,7 +247,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.comZ.data(),
-            octree.comZ,
+            octree.comZ.data(),
             n * sizeof(double),
             cudaMemcpyDeviceToHost),
         "copy octree comZ");
@@ -255,7 +255,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.pendingChildren.data(),
-            octree.pendingChildren,
+            octree.pendingChildren.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy octree pendingChildren");
@@ -263,7 +263,7 @@ HostOctree copyOctree(
     checkCuda(
         cudaMemcpy(
             host.childCount.data(),
-            octree.childCount,
+            octree.childCount.data(),
             n * sizeof(int),
             cudaMemcpyDeviceToHost),
         "copy octree childCount");

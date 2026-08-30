@@ -9,4 +9,4 @@ void allocateOctreeTopology(Octree& octree, int nNodes);
 
 void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const MortonLeafGroups& groups, const RadixToOctreePlan& plan);
 
-void freeOctree(Octree& octree);
+void freeOctree(Octree& octree) noexcept;

@@ -174,7 +174,7 @@ void Simulation::rebuildSpatialStructure() {
   staged.radixTree = {};
   plan_ = std::move(staged.plan);
   staged.plan = {};
-  octree_ = staged.octree;
+  octree_ = std::move(staged.octree);
   staged.octree = {};
   mortonKeys_ = std::move(stagedMorton);
 }

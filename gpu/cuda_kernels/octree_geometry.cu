@@ -18,18 +18,6 @@ void checkCuda(cudaError_t error, const char* operation)
         throw std::runtime_error(std::string(operation) + " failed: " + cudaGetErrorString(error));
 }
 
-template <typename T>
-void allocateDeviceArray(T*& pointer, std::size_t count, const char* name)
-{
-    if (count == 0)
-        return;
-
-    const cudaError_t error = cudaMalloc(reinterpret_cast<void**>(&pointer), count * sizeof(T));
-
-    if (error != cudaSuccess)
-        throw std::runtime_error(std::string("cudaMalloc ") + name + " failed: " + cudaGetErrorString(error));
-}
-
 const char* geometryErrorMessage(int errorCode)
 {
     switch (errorCode)
@@ -65,7 +53,7 @@ __device__ bool prefixIsValidForLevel(std::uint32_t prefix, int level)
 }
 
 
-__global__ void computeOctreeGeometryKernel(Octree octree, double rootCenterX, double rootCenterY, double rootCenterZ, double rootSide, int* errorCode)
+__global__ void computeOctreeGeometryKernel(OctreeView octree, double rootCenterX, double rootCenterY, double rootCenterZ, double rootSide, int* errorCode)
 {
     const int node = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -119,32 +107,27 @@ void allocateOctreeGeometry(Octree& octree)
     if (octree.nNodes <= 0)
         throw std::invalid_argument("Octree topology must be allocated before geometry");
 
-    if (octree.level == nullptr || octree.prefix == nullptr)
+    if (octree.level.data() == nullptr || octree.prefix.data() == nullptr)
         throw std::logic_error("Octree topology arrays required for geometry are not allocated");
 
-    if (octree.centerX != nullptr || octree.centerY != nullptr || octree.centerZ != nullptr || octree.halfSize != nullptr)
+    if (!octree.centerX.empty() || !octree.centerY.empty() || !octree.centerZ.empty() || !octree.halfSize.empty())
         throw std::logic_error("Octree geometry is already allocated");
 
     const std::size_t count = static_cast<std::size_t>(octree.nNodes);
 
     try
     {
-        allocateDeviceArray(octree.centerX, count, "octree.centerX");
-        allocateDeviceArray(octree.centerY, count, "octree.centerY");
-        allocateDeviceArray(octree.centerZ, count, "octree.centerZ");
-        allocateDeviceArray(octree.halfSize, count, "octree.halfSize");
+        octree.centerX.allocate(count);
+        octree.centerY.allocate(count);
+        octree.centerZ.allocate(count);
+        octree.halfSize.allocate(count);
     }
     catch (...)
     {
-        cudaFree(octree.centerX);
-        cudaFree(octree.centerY);
-        cudaFree(octree.centerZ);
-        cudaFree(octree.halfSize);
-
-        octree.centerX = nullptr;
-        octree.centerY = nullptr;
-        octree.centerZ = nullptr;
-        octree.halfSize = nullptr;
+        octree.centerX.reset();
+        octree.centerY.reset();
+        octree.centerZ.reset();
+        octree.halfSize.reset();
 
         throw;
     }
@@ -156,10 +139,10 @@ void computeOctreeGeometry(Octree& octree, const Bbox& boundingBox)
     if (octree.nNodes <= 0 || octree.root != 0)
         throw std::logic_error("Octree topology is not valid");
 
-    if (octree.level == nullptr || octree.prefix == nullptr)
+    if (octree.level.data() == nullptr || octree.prefix.data() == nullptr)
         throw std::logic_error("Octree topology arrays required for geometry are not allocated");
     
-    if (octree.centerX == nullptr || octree.centerY == nullptr || octree.centerZ == nullptr ||  octree.halfSize == nullptr)
+    if (octree.centerX.data() == nullptr || octree.centerY.data() == nullptr || octree.centerZ.data() == nullptr ||  octree.halfSize.data() == nullptr)
         throw std::logic_error("Octree geometry arrays are not allocated");
     
         // Copy the four bounding-box values to the host once.
@@ -168,34 +151,23 @@ void computeOctreeGeometry(Octree& octree, const Bbox& boundingBox)
     if (!std::isfinite(bounds.center_x) || !std::isfinite(bounds.center_y) || !std::isfinite(bounds.center_z) || !std::isfinite(bounds.side) || bounds.side <= 0.0)
         throw std::invalid_argument("Bounding box geometry is not valid");
 
-    int* errorCodeDevice = nullptr;
+    DeviceBuffer<int> errorCodeDevice(1);
 
-    try
-    {
-        checkCuda(cudaMalloc(reinterpret_cast<void**>(&errorCodeDevice), sizeof(int)), "allocate octree geometry error code");
-        checkCuda(cudaMemset(errorCodeDevice, 0, sizeof(int)), "initialize octree geometry error code");
+    checkCuda(cudaMemset(errorCodeDevice.data(), 0, sizeof(int)), "initialize octree geometry error code");
 
-        constexpr int threadsPerBlock = 256;
-        const int blocks =(octree.nNodes + threadsPerBlock - 1) / threadsPerBlock;
+    constexpr int threadsPerBlock = 256;
+    const int blocks =(octree.nNodes + threadsPerBlock - 1) /threadsPerBlock;
+    const OctreeView octreeView = octree.view();
 
-        computeOctreeGeometryKernel<<<blocks, threadsPerBlock>>>(octree, bounds.center_x, bounds.center_y, bounds.center_z, bounds.side, errorCodeDevice);
+    computeOctreeGeometryKernel<<<blocks, threadsPerBlock>>>(octreeView, bounds.center_x, bounds.center_y, bounds.center_z, bounds.side, errorCodeDevice.data());
 
-        checkCuda(cudaGetLastError(), "computeOctreeGeometryKernel launch");
-        checkCuda(cudaDeviceSynchronize(), "computeOctreeGeometryKernel execution");
+    checkCuda(cudaGetLastError(), "computeOctreeGeometryKernel launch");
+    checkCuda(cudaDeviceSynchronize(), "computeOctreeGeometryKernel execution");
 
-        int errorCode = 0;
+    int errorCode = 0;
 
-        checkCuda(cudaMemcpy(&errorCode, errorCodeDevice, sizeof(int), cudaMemcpyDeviceToHost), "copy octree geometry error code");
+    checkCuda(cudaMemcpy(&errorCode, errorCodeDevice.data(), sizeof(int), cudaMemcpyDeviceToHost), "copy octree geometry error code");
 
-        if (errorCode != 0)
-            throw std::runtime_error(geometryErrorMessage(errorCode));
-        
-        cudaFree(errorCodeDevice);
-        errorCodeDevice = nullptr;
-    }
-    catch (...)
-    {
-        cudaFree(errorCodeDevice);
-        throw;
-    }
+    if (errorCode != 0)
+        throw std::runtime_error(geometryErrorMessage(errorCode));
 }

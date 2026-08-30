@@ -108,10 +108,10 @@ std::array<double, 4> copyRootPhysics(
     std::array<double, 4> root{};
 
     const std::array<const double*, 4> fields{
-        octree.mass,
-        octree.comX,
-        octree.comY,
-        octree.comZ};
+        octree.mass.data(),
+        octree.comX.data(),
+        octree.comY.data(),
+        octree.comZ.data()};
 
     for (std::size_t field = 0;
          field < fields.size();
