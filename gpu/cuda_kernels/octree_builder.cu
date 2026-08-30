@@ -96,7 +96,7 @@ __device__ bool representativeKeyForRadixNode(const Tree& radixTree, const Morto
     return true;
 }
 
-__global__ void materializeSparseOctreeKernel(Octree octree, Tree radixTree, MortonLeafGroupsView groups, RadixToOctreePlan plan, int* errorCode)
+__global__ void materializeSparseOctreeKernel(Octree octree, Tree radixTree, MortonLeafGroupsView groups, RadixToOctreePlanView plan, int* errorCode)
 {
     const int radixNode = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
@@ -294,7 +294,7 @@ void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const Mort
     if (radixTree.nLeaves > 1 && (radixTree.rangeFirst == nullptr || radixTree.prefixLength == nullptr))
         throw std::logic_error("Radix metadata is incomplete");
 
-    if (plan.radixLevel == nullptr || plan.edgeNodeCount == nullptr || plan.edgeNodeOffset == nullptr)
+    if (plan.radixLevel.data() == nullptr || plan.edgeNodeCount.data() == nullptr || plan.edgeNodeOffset.data() == nullptr)
         throw std::logic_error("Radix-to-octree plan arrays are not allocated");
 
     //Empty child slots and parent IDs use -1.
@@ -343,8 +343,9 @@ void buildSparseOctreeTopology(Octree& octree, const Tree& radixTree, const Mort
         const int blocks = (plan.nRadixNodes + threadsPerBlock - 1) / threadsPerBlock;
 
         const MortonLeafGroupsView groupsView = groups.view();
-
-        materializeSparseOctreeKernel<<<blocks, threadsPerBlock>>>(octree, radixTree, groupsView, plan, errorCodeDevice);
+        const RadixToOctreePlanView planView = plan.view();
+       
+        materializeSparseOctreeKernel<<<blocks, threadsPerBlock>>>(octree, radixTree, groupsView, planView, errorCodeDevice);
 
         checkCuda(cudaGetLastError(), "materializeSparseOctreeKernel launch");
         checkCuda(cudaDeviceSynchronize(), "materializeSparseOctreeKernel execution");

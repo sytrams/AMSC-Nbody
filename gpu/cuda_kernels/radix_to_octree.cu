@@ -7,6 +7,7 @@
 #include <limits>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include "radix_to_octree.hpp"
 
@@ -18,32 +19,14 @@ namespace
             throw std::runtime_error(std::string(operation) + " failed: " + cudaGetErrorString(error));
     }
 
-    template <typename T>
-    void allocateDeviceArray(T*& pointer, std::size_t count, const char* name)
-    {
-        if (count == 0)
-            return;
-
-        const cudaError_t error = cudaMalloc(reinterpret_cast<void**>(&pointer), count * sizeof(T));
-
-        if (error != cudaSuccess)
-            throw std::runtime_error(std::string("cudaMalloc ") + name + " failed: " + cudaGetErrorString(error));
-        
-    }
-
     void ensureTemporaryStorage(RadixToOctreePlan& plan, std::size_t requiredBytes)
     {
-        if (requiredBytes <= plan.temporaryStorageBytes)
+        if (requiredBytes <= plan.temporaryStorage.size())
             return;
 
-        void* newStorage = nullptr;
-
-        checkCuda(cudaMalloc(&newStorage, requiredBytes), "cudaMalloc radix-to-octree temporary storage");
-
-        cudaFree(plan.temporaryStorage);
-
-        plan.temporaryStorage = newStorage;
-        plan.temporaryStorageBytes = requiredBytes;
+        DeviceBuffer<std::byte> newStorage(requiredBytes);
+        
+        plan.temporaryStorage = std::move(newStorage);
     }
 
     const char* planErrorMessage(int errorCode)
@@ -166,17 +149,17 @@ void allocateRadixToOctreePlan(RadixToOctreePlan& plan, int nRadixNodes)
     if (nRadixNodes <= 0)
         throw std::invalid_argument("nRadixNodes must be positive");
 
-    if (plan.radixLevel != nullptr || plan.edgeNodeCount != nullptr || plan.edgeNodeOffset != nullptr || plan.errorCodeDevice != nullptr || plan.temporaryStorage != nullptr)
+    if (!plan.radixLevel.empty() || !plan.edgeNodeCount.empty() || !plan.edgeNodeOffset.empty() || !plan.errorCodeDevice.empty() || !plan.temporaryStorage.empty())
         throw std::logic_error("RadixToOctreePlan memory is already allocated");
 
     const std::size_t count = static_cast<std::size_t>(nRadixNodes);
 
     try
     {
-        allocateDeviceArray(plan.radixLevel, count, "plan.radixLevel");
-        allocateDeviceArray(plan.edgeNodeCount, count, "plan.edgeNodeCount");
-        allocateDeviceArray(plan.edgeNodeOffset, count, "plan.edgeNodeOffset");
-        allocateDeviceArray(plan.errorCodeDevice, 1, "plan.errorCodeDevice");
+        plan.radixLevel.allocate(count);
+        plan.edgeNodeCount.allocate(count);
+        plan.edgeNodeOffset.allocate(count);
+        plan.errorCodeDevice.allocate(1);
     }
     catch (...)
     {
@@ -184,7 +167,7 @@ void allocateRadixToOctreePlan(RadixToOctreePlan& plan, int nRadixNodes)
         throw;
     }
 
-    plan.nRadixNodes =nRadixNodes;
+    plan.nRadixNodes = nRadixNodes;
     plan.nOctreeNodes = 0;
 }
 
@@ -210,45 +193,45 @@ void buildRadixToOctreePlan(RadixToOctreePlan& plan, const Tree& radixTree, cons
     if (plan.nRadixNodes != expectedRadixNodes)
         throw std::invalid_argument("RadixToOctreePlan size does not match the radix tree");
 
-    if (plan.radixLevel == nullptr || plan.edgeNodeCount == nullptr || plan.edgeNodeOffset == nullptr || plan.errorCodeDevice == nullptr)
+    if (plan.radixLevel.data() == nullptr || plan.edgeNodeCount.data() == nullptr || plan.edgeNodeOffset.data() == nullptr || plan.errorCodeDevice.data() == nullptr)
         throw std::logic_error("RadixToOctreePlan memory is not allocated");
 
     plan.nOctreeNodes = 0;
 
-    checkCuda(cudaMemset(plan.errorCodeDevice, 0, sizeof(int)), "cudaMemset plan.errorCodeDevice");
+    checkCuda(cudaMemset(plan.errorCodeDevice.data(), 0, sizeof(int)), "cudaMemset plan.errorCodeDevice");
 
     constexpr int threadsPerBlock = 256;
 
     const int blocks =(plan.nRadixNodes + threadsPerBlock - 1) / threadsPerBlock;
 
-    computeRadixToOctreePlanKernel<<<blocks, threadsPerBlock>>>(radixTree, groups.uniqueKeys.data(), plan.nRadixNodes, plan.radixLevel, plan.edgeNodeCount, plan.errorCodeDevice);
+    computeRadixToOctreePlanKernel<<<blocks, threadsPerBlock>>>(radixTree, groups.uniqueKeys.data(), plan.nRadixNodes, plan.radixLevel.data(), plan.edgeNodeCount.data(), plan.errorCodeDevice.data());
 
     checkCuda(cudaGetLastError(), "computeRadixToOctreePlanKernel launch");
     checkCuda(cudaDeviceSynchronize(), "computeRadixToOctreePlanKernel execution");
 
     int errorCode = 0;
 
-    checkCuda(cudaMemcpy(&errorCode, plan.errorCodeDevice, sizeof(int), cudaMemcpyDeviceToHost), "copy radix-to-octree error code");
+    checkCuda(cudaMemcpy(&errorCode, plan.errorCodeDevice.data(), sizeof(int), cudaMemcpyDeviceToHost), "copy radix-to-octree error code");
 
     if (errorCode != 0)
         throw std::runtime_error(planErrorMessage(errorCode));
 
     std::size_t scanStorageBytes = 0;
 
-    checkCuda(cub::DeviceScan::ExclusiveSum(nullptr, scanStorageBytes, plan.edgeNodeCount, plan.edgeNodeOffset, plan.nRadixNodes), "DeviceScan radix-edge storage query");
+    checkCuda(cub::DeviceScan::ExclusiveSum(nullptr, scanStorageBytes, plan.edgeNodeCount.data(), plan.edgeNodeOffset.data(), plan.nRadixNodes), "DeviceScan radix-edge storage query");
 
     ensureTemporaryStorage(plan, scanStorageBytes);
 
-    checkCuda(cub::DeviceScan::ExclusiveSum(plan.temporaryStorage, scanStorageBytes, plan.edgeNodeCount, plan.edgeNodeOffset, plan.nRadixNodes), "DeviceScan radix-edge execution");
+    checkCuda(cub::DeviceScan::ExclusiveSum(plan.temporaryStorage.data(), scanStorageBytes, plan.edgeNodeCount.data(), plan.edgeNodeOffset.data(), plan.nRadixNodes), "DeviceScan radix-edge execution");
 
     const int lastIndex = plan.nRadixNodes - 1;
 
     int lastOffset = 0;
     int lastCount = 0;
 
-    checkCuda(cudaMemcpy(&lastOffset, plan.edgeNodeOffset + lastIndex, sizeof(int), cudaMemcpyDeviceToHost), "copy final octree offset");
+    checkCuda(cudaMemcpy(&lastOffset, plan.edgeNodeOffset.data() + lastIndex, sizeof(int), cudaMemcpyDeviceToHost), "copy final octree offset");
 
-    checkCuda(cudaMemcpy(&lastCount, plan.edgeNodeCount + lastIndex, sizeof(int), cudaMemcpyDeviceToHost), "copy final octree count");
+    checkCuda(cudaMemcpy(&lastCount, plan.edgeNodeCount.data() + lastIndex, sizeof(int), cudaMemcpyDeviceToHost), "copy final octree count");
 
     const long long generatedNodes = static_cast<long long>(lastOffset) + static_cast<long long>(lastCount);
 
@@ -258,21 +241,7 @@ void buildRadixToOctreePlan(RadixToOctreePlan& plan, const Tree& radixTree, cons
     plan.nOctreeNodes = 1 + static_cast<int>(generatedNodes);
 }
 
-void freeRadixToOctreePlan(RadixToOctreePlan& plan)
+void freeRadixToOctreePlan(RadixToOctreePlan& plan) noexcept
 {
-    cudaFree(plan.radixLevel);
-    cudaFree(plan.edgeNodeCount);
-    cudaFree(plan.edgeNodeOffset);
-    cudaFree(plan.errorCodeDevice);
-    cudaFree(plan.temporaryStorage);
-
-    plan.radixLevel = nullptr;
-    plan.edgeNodeCount = nullptr;
-    plan.edgeNodeOffset = nullptr;
-    plan.errorCodeDevice = nullptr;
-    plan.temporaryStorage = nullptr;
-
-    plan.nRadixNodes = 0;
-    plan.nOctreeNodes = 0;
-    plan.temporaryStorageBytes = 0;
+    plan = RadixToOctreePlan{};
 }
