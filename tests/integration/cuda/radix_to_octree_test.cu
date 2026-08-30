@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <vector>
 
 #include "cuda_test.hpp"
@@ -13,6 +14,18 @@
 #include "tree_builder.hpp"
 
 namespace {
+
+static_assert(
+    !std::is_copy_constructible_v<RadixToOctreePlan>);
+
+static_assert(
+    !std::is_copy_assignable_v<RadixToOctreePlan>);
+
+static_assert(
+    std::is_move_constructible_v<RadixToOctreePlan>);
+
+static_assert(
+    std::is_move_assignable_v<RadixToOctreePlan>);
 
 void checkCuda(
     cudaError_t error,
@@ -165,7 +178,7 @@ void runExactCase(
         checkCuda(
             cudaMemcpy(
                 actualLevels.data(),
-                plan.radixLevel,
+                plan.radixLevel.data(),
                 bytes,
                 cudaMemcpyDeviceToHost),
             "copy radix levels");
@@ -173,7 +186,7 @@ void runExactCase(
         checkCuda(
             cudaMemcpy(
                 actualCounts.data(),
-                plan.edgeNodeCount,
+                plan.edgeNodeCount.data(),
                 bytes,
                 cudaMemcpyDeviceToHost),
             "copy edge counts");
@@ -181,7 +194,7 @@ void runExactCase(
         checkCuda(
             cudaMemcpy(
                 actualOffsets.data(),
-                plan.edgeNodeOffset,
+                plan.edgeNodeOffset.data(),
                 bytes,
                 cudaMemcpyDeviceToHost),
             "copy edge offsets");
