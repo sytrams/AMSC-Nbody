@@ -73,4 +73,11 @@ LOCAL_CUDA_CONTAINER.md
 
 # Downloaded system packages
 *.deb
+*.deb.*.venv/
+
+# Local Python virtual environments
+.venv/
+
+# Downloaded Debian packages and duplicate downloads
+*.deb
 *.deb.*

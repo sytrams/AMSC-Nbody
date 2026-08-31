@@ -78,14 +78,28 @@ for particles in "${SIZES[@]}"; do
     for ((repeat = 1; repeat <= REPEATS; ++repeat)); do
         echo "N=${particles}, repetition ${repeat}/${REPEATS}"
 
+        set +e
+
         output="$(
             "${BINARY}" \
                 --input "${input}" \
                 --time-step "${TIME_STEP}" \
                 --steps "${STEPS}" \
                 --theta "${THETA}" \
-                --softening "${SOFTENING}"
+                --softening "${SOFTENING}" \
+                2>&1
         )"
+
+        status=$?
+
+        set -e
+
+        if [[ ${status} -ne 0 ]]; then
+            echo "Benchmark failed for N=${particles}, repetition=${repeat}" >&2
+            echo "Exit code: ${status}" >&2
+            echo "${output}" >&2
+            exit "${status}"
+        fi
 
         initialization="$(
             awk '/initialization wall time:/ {print $(NF-1)}' <<< "${output}"
