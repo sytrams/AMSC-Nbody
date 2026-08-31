@@ -12,4 +12,10 @@ struct BarnesHutParameters
     double gravitationalConstant = 6.67430e-11;
 };
 
-void computeBarnesHutAcceleration(const Octree& octree, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ, double* d_accelerationX, double* d_accelerationY, double* d_accelerationZ, std::size_t particleCount, const BarnesHutParameters& parameters);
+enum class BarnesHutParticleOrder
+{
+    original,
+    morton
+};
+
+void computeBarnesHutAcceleration(const Octree& octree, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ, double* d_accelerationX, double* d_accelerationY, double* d_accelerationZ, std::size_t particleCount, const BarnesHutParameters& parameters, BarnesHutParticleOrder particleOrder = BarnesHutParticleOrder::original);

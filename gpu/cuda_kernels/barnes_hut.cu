@@ -161,6 +161,7 @@ __device__ int nextTraversalNode(const ConstOctreeView& octree, int node, int* e
     return -1;
 }
 
+template <bool particleDataMortonOrdered>
 __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, double* accelerationX, double* accelerationY, double* accelerationZ, double theta, double softeningSquared, double gravitationalConstant, int* errorCode)
 {
     const int sortedTarget =
@@ -179,9 +180,11 @@ __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const
 
     const int target = static_cast<int>(targetIndex);
 
-    const double targetX = positionX[target];
-    const double targetY = positionY[target];
-    const double targetZ = positionZ[target];
+    const int targetDataIndex = particleDataMortonOrdered ? sortedTarget : target;
+
+    const double targetX = positionX[targetDataIndex];
+    const double targetY = positionY[targetDataIndex];
+    const double targetZ = positionZ[targetDataIndex];
     double ax = 0.0;
     double ay = 0.0;
     double az = 0.0;
@@ -236,7 +239,9 @@ __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const
                 if (source == static_cast<std::uint32_t>(target))
                     continue;
 
-                if (!accumulatePointMassAcceleration(targetX, targetY, targetZ, positionX[source], positionY[source], positionZ[source], particleMass[source], gravitationalConstant, softeningSquared, ax, ay, az))
+                const int sourceDataIndex = particleDataMortonOrdered ? sortedPosition : static_cast<int>(source);
+
+                if (!accumulatePointMassAcceleration(targetX, targetY, targetZ, positionX[sourceDataIndex], positionY[sourceDataIndex], positionZ[sourceDataIndex], particleMass[sourceDataIndex], gravitationalConstant, softeningSquared, ax, ay, az))
                 {
                     atomicCAS(errorCode, 0, 6);
                     return;
@@ -317,7 +322,7 @@ __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const
 }
 
 
-void computeBarnesHutAcceleration(const Octree& octree, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ, double* d_accelerationX, double* d_accelerationY, double* d_accelerationZ, std::size_t particleCount, const BarnesHutParameters& parameters)
+void computeBarnesHutAcceleration(const Octree& octree, const std::uint32_t* d_sortedIndices, const double* d_mass, const double* d_positionX, const double* d_positionY, const double* d_positionZ, double* d_accelerationX, double* d_accelerationY, double* d_accelerationZ, std::size_t particleCount, const BarnesHutParameters& parameters, BarnesHutParticleOrder particleOrder)
 {
     
     // Validate octree state
@@ -367,7 +372,12 @@ void computeBarnesHutAcceleration(const Octree& octree, const std::uint32_t* d_s
 
     const ConstOctreeView octreeView = octree.view();
        
-    computeBarnesHutAccelerationKernel<<<blocks, threadsPerBlock>>>(octreeView, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ, d_accelerationX, d_accelerationY, d_accelerationZ, parameters.theta, softeningSquared, parameters.gravitationalConstant, errorCodeDevice.data());
+    if (particleOrder == BarnesHutParticleOrder::morton)
+        computeBarnesHutAccelerationKernel<true><<<blocks, threadsPerBlock>>>(octreeView, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ, d_accelerationX, d_accelerationY, d_accelerationZ, parameters.theta, softeningSquared, parameters.gravitationalConstant, errorCodeDevice.data());
+    else if (particleOrder == BarnesHutParticleOrder::original)
+        computeBarnesHutAccelerationKernel<false><<<blocks, threadsPerBlock>>>(octreeView, d_sortedIndices, d_mass, d_positionX, d_positionY, d_positionZ, d_accelerationX, d_accelerationY, d_accelerationZ, parameters.theta, softeningSquared, parameters.gravitationalConstant, errorCodeDevice.data());
+    else
+        throw std::invalid_argument("Unknown Barnes-Hut particle order");
 
     checkCuda(cudaGetLastError(), "computeBarnesHutAccelerationKernel launch");
     checkCuda(cudaDeviceSynchronize(), "computeBarnesHutAccelerationKernel execution");
