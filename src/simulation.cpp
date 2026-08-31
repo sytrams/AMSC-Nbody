@@ -187,7 +187,6 @@ void Simulation::computeAccelerations() {
   const nbody::detail::DeviceAccelerationView output =
       nbody::detail::nextAcceleration(*deviceState_);
 
-  nbody::detail::clearNextAcceleration(*deviceState_);
   computeBarnesHutAcceleration(
       octree_, mortonKeys_->indices_device_data(), particleView.mass,
       particleView.x, particleView.y, particleView.z, output.x, output.y,
