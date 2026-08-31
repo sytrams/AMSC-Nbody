@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <fstream>
@@ -170,17 +171,28 @@ public:
         static_cast<std::streamsize>(num_particles_ * sizeof(double));
 
     auto read_block = [&](thrust::device_vector<double> &destination,
-                          const std::string &block_name) {
-      inFile.read(reinterpret_cast<char *>(host_buffer.data()), bytes);
+                      const std::string &block_name,
+                      bool require_non_negative = false) {
+    inFile.read(reinterpret_cast<char *>(host_buffer.data()), bytes);
 
-      if (inFile.gcount() != bytes) {
-        throw std::runtime_error("Incomplete " + block_name + " block");
-      }
+    if (inFile.gcount() != bytes) {
+      throw std::runtime_error("Incomplete " + block_name + " block");
+    }
 
-      thrust::copy(host_buffer.begin(), host_buffer.end(), destination.begin());
-    };
+    for (std::size_t index = 0; index < host_buffer.size(); ++index) {
+      const double value = host_buffer[index];
 
-    read_block(mass_, "mass");
+      if (!std::isfinite(value)) 
+        throw std::runtime_error("Non-finite " + block_name + " value at particle " + std::to_string(index));
+      
+      if (require_non_negative && value < 0.0) 
+        throw std::runtime_error("Negative " + block_name +" value at particle " + std::to_string(index));
+    }
+
+    thrust::copy(host_buffer.begin(), host_buffer.end(), destination.begin());
+  };
+
+    read_block(mass_, "mass", true);
 
     read_block(x_, "x position");
     read_block(y_, "y position");

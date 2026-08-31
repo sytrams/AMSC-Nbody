@@ -133,25 +133,29 @@ protected:
                  static_cast<std::streamsize>(values.size() * sizeof(double)));
   }
 
-  void writePlanarFile(HeaderWidth width, bool includeTypes = false) {
+  void writePlanarFile(const ParticleData &data, HeaderWidth width, bool includeTypes = false) {
     std::ofstream output(testFile, std::ios::binary | std::ios::trunc);
     ASSERT_TRUE(output.is_open());
 
-    writeHeader(output, width, particleData.size());
-    writeBlock(output, particleData.mass);
-    writeBlock(output, particleData.x);
-    writeBlock(output, particleData.y);
-    writeBlock(output, particleData.z);
-    writeBlock(output, particleData.vx);
-    writeBlock(output, particleData.vy);
-    writeBlock(output, particleData.vz);
+    writeHeader(output, width, data.size());
+    writeBlock(output, data.mass);
+    writeBlock(output, data.x);
+    writeBlock(output, data.y);
+    writeBlock(output, data.z);
+    writeBlock(output, data.vx);
+    writeBlock(output, data.vy);
+    writeBlock(output, data.vz);
+
     if (includeTypes) {
-      output.write(
-          reinterpret_cast<const char *>(particleData.type.data()),
-          static_cast<std::streamsize>(particleData.type.size()));
+      output.write(reinterpret_cast<const char *>(data.type.data()), static_cast<std::streamsize>(data.type.size()));
     }
+
     ASSERT_TRUE(output.good());
   }
+
+void writePlanarFile(HeaderWidth width, bool includeTypes = false) {
+  writePlanarFile(particleData, width, includeTypes);
+}
 
   void writeHeaderOnly(HeaderWidth width, std::uint64_t count) {
     std::ofstream output(testFile, std::ios::binary | std::ios::trunc);
@@ -320,4 +324,67 @@ TEST_F(ParticleFileTest, Rejects64BitCountBeyondSupportedRange) {
   std::ifstream input(testFile, std::ios::binary);
 
   expectRuntimeErrorContaining(input, "Unsupported particle file layout");
+}
+
+TEST_F(ParticleFileTest, RejectsNegativeMass) {
+  ParticleData invalid = particleData;
+  invalid.mass[0] = -1.0;
+
+  writePlanarFile(invalid, HeaderWidth::Bits64);
+
+  std::ifstream input(testFile, std::ios::binary);
+
+  expectRuntimeErrorContaining(input, "Negative mass value");
+}
+
+TEST_F(ParticleFileTest, RejectsNonFiniteMass) {
+  ParticleData invalid = particleData;
+  invalid.mass[0] = std::numeric_limits<double>::quiet_NaN();
+
+  writePlanarFile(invalid, HeaderWidth::Bits64);
+
+  std::ifstream input(testFile, std::ios::binary);
+
+  expectRuntimeErrorContaining(input, "Non-finite mass value");
+}
+
+TEST_F(ParticleFileTest, RejectsNonFinitePosition) {
+  ParticleData invalid = particleData;
+  invalid.x[1] = std::numeric_limits<double>::infinity();
+
+  writePlanarFile(invalid, HeaderWidth::Bits64);
+
+  std::ifstream input(testFile, std::ios::binary);
+
+  expectRuntimeErrorContaining(input, "Non-finite x position value");
+}
+
+TEST_F(ParticleFileTest, RejectsNonFiniteVelocity) {
+  ParticleData invalid = particleData;
+  invalid.vz[0] = std::numeric_limits<double>::quiet_NaN();
+
+  writePlanarFile(invalid, HeaderWidth::Bits64);
+
+  std::ifstream input(testFile, std::ios::binary);
+
+  expectRuntimeErrorContaining(input, "Non-finite z velocity value");
+}
+
+TEST_F(ParticleFileTest, AcceptsZeroMassParticle) {
+  ParticleData valid = particleData;
+  valid.mass[0] = 0.0;
+
+  writePlanarFile(valid, HeaderWidth::Bits64);
+
+  std::ifstream input(testFile, std::ios::binary);
+
+  ASSERT_NO_THROW({
+    Particles particles(input);
+
+    const auto view = particles.device_view();
+    const auto masses = copyToHost(view.mass, view.count);
+
+    ASSERT_EQ(masses.size(), valid.size());
+    EXPECT_DOUBLE_EQ(masses[0], 0.0);
+  });
 }
