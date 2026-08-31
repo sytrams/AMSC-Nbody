@@ -220,6 +220,10 @@ if(NBODY_ENABLE_CUDA)
             "NBODY_ENABLE_CUDA=ON, but no CUDA compiler was found")
     endif()
 
+    if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
+        set(CMAKE_CUDA_ARCHITECTURES native)
+    endif()
+    
     enable_language(CUDA)
     find_package(CUDAToolkit REQUIRED)
 

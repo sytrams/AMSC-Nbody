@@ -327,6 +327,16 @@ TEST_F(
         children);
 
     copyToDevice(
+        octree.parent.data(),
+        std::vector<int>{
+            -1,  // node 0: root
+            0,  // node 1
+            0,  // node 2
+            2,  // node 3
+            2   // node 4
+        });
+
+    copyToDevice(
         octree.firstParticle.data(),
         std::vector<int>{
             -1,
@@ -577,6 +587,16 @@ TEST_F(
         children);
 
     copyToDevice(
+        octree.parent.data(),
+        std::vector<int>{
+            -1,
+            0,
+            0,
+            2,
+            2
+        });
+
+    copyToDevice(
         octree.firstParticle.data(),
         std::vector<int>{
             -1,
@@ -781,6 +801,16 @@ TEST_F(
     copyToDevice(
         octree.children.data(),
         children);
+
+    copyToDevice(
+        octree.parent.data(),
+        std::vector<int>{
+            -1,
+            0,
+            0,
+            2,
+            2
+        });
 
     copyToDevice(
         octree.firstParticle.data(),

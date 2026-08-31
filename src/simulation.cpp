@@ -148,7 +148,7 @@ void Simulation::rebuildSpatialStructure() {
   buildMortonLeafGroups(staged.groups, stagedMorton->keys_device_data(),
                         particleCount);
 
-  allocateTree(staged.radixTree, staged.groups.nGroups);
+  allocateTreeTopology(staged.radixTree, staged.groups.nGroups);
   buildTreeFromMortonGroups(staged.radixTree, staged.groups);
 
   allocateRadixToOctreePlan(staged.plan, 2 * staged.groups.nGroups - 1);
@@ -187,7 +187,6 @@ void Simulation::computeAccelerations() {
   const nbody::detail::DeviceAccelerationView output =
       nbody::detail::nextAcceleration(*deviceState_);
 
-  nbody::detail::clearNextAcceleration(*deviceState_);
   computeBarnesHutAcceleration(
       octree_, mortonKeys_->indices_device_data(), particleView.mass,
       particleView.x, particleView.y, particleView.z, output.x, output.y,

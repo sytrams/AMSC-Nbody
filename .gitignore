@@ -62,3 +62,22 @@ __pycache__/
 *.pyc
 *:Zone.Identifier
 LOCAL_CUDA_CONTAINER.md
+
+# Local environment and credentials
+.env
+.env.*
+!.env.example
+
+# Local caches
+.cache/
+
+# Downloaded system packages
+*.deb
+*.deb.*.venv/
+
+# Local Python virtual environments
+.venv/
+
+# Downloaded Debian packages and duplicate downloads
+*.deb
+*.deb.*

@@ -1,24 +1,11 @@
-#include <cuda_runtime.h>
-
 #include <cstddef>
 #include <stdexcept>
-#include <string>
 
 #include <thrust/device_vector.h>
 
 #include "simulation_cuda.hpp"
 
 namespace nbody::detail {
-
-namespace {
-
-void checkCuda(cudaError_t error, const char *operation) {
-  if (error != cudaSuccess)
-    throw std::runtime_error(std::string(operation) +
-                             " failed: " + cudaGetErrorString(error));
-}
-
-} // namespace
 
 struct SimulationDeviceState {
   explicit SimulationDeviceState(std::size_t count)
@@ -58,15 +45,6 @@ DeviceAccelerationView nextAcceleration(SimulationDeviceState &state) noexcept {
           thrust::raw_pointer_cast(state.nextAccelerationX.data()),
           thrust::raw_pointer_cast(state.nextAccelerationY.data()),
           thrust::raw_pointer_cast(state.nextAccelerationZ.data())};
-}
-
-void clearNextAcceleration(SimulationDeviceState &state) {
-  const DeviceAccelerationView next = nextAcceleration(state);
-  const std::size_t bytes = next.count * sizeof(double);
-
-  checkCuda(cudaMemset(next.x, 0, bytes), "clear x acceleration");
-  checkCuda(cudaMemset(next.y, 0, bytes), "clear y acceleration");
-  checkCuda(cudaMemset(next.z, 0, bytes), "clear z acceleration");
 }
 
 void swapAccelerationBuffers(SimulationDeviceState &state) noexcept {
