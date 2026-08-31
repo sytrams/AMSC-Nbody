@@ -362,7 +362,7 @@ void computeBarnesHutAcceleration(const Octree& octree, const std::uint32_t* d_s
 
     checkCuda(cudaMemset(errorCodeDevice.data(), 0, sizeof(int)), "initialize Barnes-Hut error code");
 
-    constexpr int threadsPerBlock = 256;
+    constexpr int threadsPerBlock = 128;
     const int blocks = (octree.nParticles + threadsPerBlock - 1) / threadsPerBlock;
 
     const ConstOctreeView octreeView = octree.view();
