@@ -57,12 +57,12 @@ $$
 According to Newton's law of universal gravitation, the acceleration generated on particle $i$ by particle $j$ is
 
 $$
-\mathbf{a}_{ij}
-=
+\mathbf{a}_{ij} =
 Gm_j
 \frac{\mathbf{r}_j-\mathbf{r}_i}
 {\left(\|\mathbf{r}_j-\mathbf{r}_i\|^2+\varepsilon^2\right)^{3/2}},
 $$
+
 
 where:
 
@@ -72,8 +72,7 @@ where:
 The total acceleration of particle $i$ is therefore
 
 $$
-\mathbf{a}_i
-=
+\mathbf{a}_i =
 \sum_{\substack{j=0\\j\neq i}}^{N-1}
 \mathbf{a}_{ij}.
 $$
@@ -149,16 +148,14 @@ Leapfrog was selected because it is a second-order symplectic method and provide
 Given particle position $r_n$, velocity $v_n$, acceleration $a_n$, and timestep $\Delta t$, one complete step is
 
 $$
-\mathbf{v}_{n+\frac12}
-=
+\mathbf{v}_{n+\frac12} =
 \mathbf{v}_n
 +
 \frac{\Delta t}{2}\mathbf{a}_n,
 $$
 
 $$
-\mathbf{r}_{n+1}
-=
+\mathbf{r}_{n+1} =
 \mathbf{r}_n
 +
 \Delta t\,\mathbf{v}_{n+\frac12},
@@ -167,17 +164,15 @@ $$
 followed by reconstruction of the spatial structure and evaluation of the new acceleration
 
 $$
-\mathbf{a}_{n+1}
-=
-\mathbf{a}(\mathbf{r}_{n+1})
-$$,
+\mathbf{a}_{n+1} = \mathbf{a}(\mathbf{r}_{n+1}),
+$$
+
 
 
 and finally
 
 $$
-\mathbf{v}_{n+1}
-=
+\mathbf{v}_{n+1} =
 \mathbf{v}_{n+\frac12}
 +
 \frac{\Delta t}{2}\mathbf{a}_{n+1}.
@@ -373,8 +368,7 @@ $$
 and
 
 $$
-\mathbf{r}_{CM}
-=
+\mathbf{r}_{CM} =
 \frac{1}{M}
 \sum_i m_i\mathbf{r}_i.
 $$
@@ -674,7 +668,7 @@ The sanitizer runtime is significantly longer than normal test execution because
 
 # 22. Numerical accuracy
 
-Barnes-Hut introduces a controlled force approximation through \(\theta\), whereas leapfrog introduces a time-discretization error through \(\Delta t\).
+Barnes-Hut introduces a controlled force approximation through \(\theta\), whereas leapfrog introduces a time-discretization error through $\Delta t$.
 
 These two parameters control different sources of error.
 
@@ -708,9 +702,9 @@ pair interactions per timestep.
 
 Barnes-Hut instead builds a hierarchy of spatial cells and, for typical non-pathological distributions, reduces force evaluation toward approximately
 
-\[
+$$
 O(N\log N).
-\]
+$$
 
 The project additionally performs:
 
