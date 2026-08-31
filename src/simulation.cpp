@@ -184,14 +184,17 @@ void Simulation::computeAccelerations() {
     throw std::logic_error("Simulation spatial/device state is not available");
 
   const DeviceParticlesView particleView = particles_.device_view();
+  nbody::detail::gatherMortonOrderedParticleData(*deviceState_, mortonKeys_->indices_device_data(), particleView.mass, particleView.x, particleView.y, particleView.z, particleView.count);
+  const nbody::detail::DeviceMortonParticleView mortonParticles =
+    nbody::detail::mortonOrderedParticles(*deviceState_);
   const nbody::detail::DeviceAccelerationView output =
       nbody::detail::nextAcceleration(*deviceState_);
-
   computeBarnesHutAcceleration(
-      octree_, mortonKeys_->indices_device_data(), particleView.mass,
-      particleView.x, particleView.y, particleView.z, output.x, output.y,
+      octree_, mortonKeys_->indices_device_data(), mortonParticles.mass,
+      mortonParticles.x, mortonParticles.y, mortonParticles.z, output.x, output.y,
       output.z, particleView.count,
-      BarnesHutParameters{config_.theta, config_.softening, G});
+      BarnesHutParameters{config_.theta, config_.softening, G},
+      BarnesHutParticleOrder::morton);
 }
 
 void Simulation::updatePositions() {
