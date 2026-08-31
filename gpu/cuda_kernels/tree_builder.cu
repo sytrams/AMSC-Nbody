@@ -233,7 +233,7 @@ __global__ void computeCentersOfMassKernel(TreeView tree, int N)
 }
 
 //memory allocation
-void allocateTree(Tree& tree, int N)
+void allocateTreeTopology(Tree& tree, int N)
 {
     if (N <= 0)
         throw std::invalid_argument("N must be positive");
@@ -242,6 +242,7 @@ void allocateTree(Tree& tree, int N)
         throw std::logic_error("Tree memory is already allocated");
 
     const std::size_t internalNodeCount = static_cast<std::size_t>(N - 1);
+
     const std::size_t totalNodeCount = static_cast<std::size_t>(N) * 2 - 1;
 
     try
@@ -253,10 +254,33 @@ void allocateTree(Tree& tree, int N)
             tree.rangeFirst.allocate(internalNodeCount);
             tree.rangeLast.allocate(internalNodeCount);
             tree.prefixLength.allocate(internalNodeCount);
-            tree.visitCount.allocate(internalNodeCount);
         }
 
         tree.parent.allocate(totalNodeCount);
+    }
+    catch (...)
+    {
+        freeTree(tree);
+        throw;
+    }
+
+    tree.nLeaves = N;
+    tree.nInternalNodes = N - 1;
+}
+
+
+void allocateTree(Tree& tree, int N)
+{
+    allocateTreeTopology(tree, N);
+
+    const std::size_t internalNodeCount = static_cast<std::size_t>(N - 1);
+    const std::size_t totalNodeCount = static_cast<std::size_t>(N) * 2 - 1;
+
+    try
+    {
+        if (N > 1)
+            tree.visitCount.allocate(internalNodeCount);
+
         tree.mass.allocate(totalNodeCount);
         tree.comX.allocate(totalNodeCount);
         tree.comY.allocate(totalNodeCount);
@@ -267,9 +291,6 @@ void allocateTree(Tree& tree, int N)
         freeTree(tree);
         throw;
     }
-
-    tree.nLeaves = N;
-    tree.nInternalNodes = N - 1;
 }
 
 //free memory

@@ -148,7 +148,7 @@ void Simulation::rebuildSpatialStructure() {
   buildMortonLeafGroups(staged.groups, stagedMorton->keys_device_data(),
                         particleCount);
 
-  allocateTree(staged.radixTree, staged.groups.nGroups);
+  allocateTreeTopology(staged.radixTree, staged.groups.nGroups);
   buildTreeFromMortonGroups(staged.radixTree, staged.groups);
 
   allocateRadixToOctreePlan(staged.plan, 2 * staged.groups.nGroups - 1);

@@ -5,6 +5,8 @@
 #include "morton_leaf_groups.hpp"
 #include "tree_types.hpp"
 
+void allocateTreeTopology(Tree& tree, int nLeaves);
+
 void allocateTree(Tree& tree, int nLeaves);
 
 void buildTree(Tree& tree, const std::uint32_t* d_sortedKeys, int nLeaves);
