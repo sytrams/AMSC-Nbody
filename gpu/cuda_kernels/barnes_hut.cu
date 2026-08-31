@@ -100,10 +100,21 @@ __device__ bool nodeContainsTarget(const ConstOctreeView& octree, int node, doub
 
 __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, double* accelerationX, double* accelerationY, double* accelerationZ, double theta, double softeningSquared, double gravitationalConstant, int* errorCode)
 {
-    const int target = static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
+    const int sortedTarget =
+    static_cast<int>(blockIdx.x * blockDim.x + threadIdx.x);
 
-    if (target >= octree.nParticles)
+    if (sortedTarget >= octree.nParticles)
         return;
+
+    const std::uint32_t targetIndex = sortedIndices[sortedTarget];
+
+    if (targetIndex >= static_cast<std::uint32_t>(octree.nParticles))
+    {
+        atomicCAS(errorCode, 0, 3);
+        return;
+    }
+
+    const int target = static_cast<int>(targetIndex);
 
     const double targetX = positionX[target];
     const double targetY = positionY[target];
