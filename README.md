@@ -1,58 +1,834 @@
-# NBody
-In an N-body problem, we need to find the **positions** and **velocities** of a **collection of interacting particles** over a period of time. An n-body solver is a program that finds the solution to an n-body problem by simulating the behavior of the particles. The input to the problem is the **mass**, **position**, and **velocity** of each particle at the start of the simulation, and the output is typically the **position** and **velocity** of each particle at a sequence of user-specified times.
-We’ll use **Newton’s second law of motion** and his **law of universal gravitation** to determine the positions and velocities. 
-If particle q has position $s_q(t)$ at time t , and particle k has position $s_k(t)$, then the force on particle q exerted by particle k is given by:
+# AMSC N-Body
+Silvestri Martina e Storti Edoardo
+
+## CUDA Barnes-Hut N-Body Simulation
+
+This project implements a three-dimensional gravitational N-body simulator designed for GPU execution with CUDA. In this design C++ is used as a CUDA kernel manager exploiting its containers and safe pointers in order to safely manage the host-device memory communication. To give CUDA an higher level of abstraction without losing performance it was essential to take advantage of the C++ classes and methods. Namespaces were used to create private environments in header files and source codes to achieve safe access throughout the whole project.
+
+The objective is to simulate systems containing a large number of gravitationally interacting particles while avoiding the $(O(N^2)$ computational cost of direct all-pairs force evaluation. The implementation therefore combines the Barnes-Hut approximation with a GPU-oriented spatial data structure based on Morton codes, radix sorting, a Karras radix tree, and a sparse octree.
+
+The final simulation pipeline includes:
+
+- three-dimensional particle dynamics;
+- double-precision particle state and force computation;
+- CUDA execution;
+- Morton spatial ordering;
+- GPU radix sorting with CUB;
+- Karras-style radix-tree construction;
+- conversion to a sparse octree;
+- bottom-up computation of node masses and centers of mass;
+- Barnes-Hut gravitational acceleration;
+- stackless octree traversal;
+- Morton-ordered target traversal and particle storage;
+- leapfrog time integration;
+- configurable Barnes-Hut opening angle and gravitational softening;
+- CPU and CUDA unit tests;
+- CUDA integration and physical-accuracy tests;
+- Compute Sanitizer validation;
+- headless frame streaming for cluster execution;
+- a Metal viewer for local visualization.
+
+---
+
+# 1. Physical model
+
+For a system containing $N$ particles, particle $i$ has mass $m_i$, position
 
 $$
-f_{qk}(t) = -\frac{G m_q m_k}{|s_q(t) - s_k(t)|^3} \cdot [s_q(t) - s_k(t)]
+\mathbf{r}_i =
+\begin{bmatrix}
+x_i\\
+y_i\\
+z_i
+\end{bmatrix},
 $$
 
-**Verlet integration** is a numerical method used to integrate Newton's equations of motion. It is frequently used to calculate trajectories of particles in molecular dynamics simulations and computer graphics. The Verlet integrator **provides good numerical stability**, as well as other properties that are important in physical systems such as time reversibility and preservation of the symplectic form on phase space.
-For a second-order differential equation of the type $\ddot{x}(t)=A(x(t))$ with initial conditions $x(t_{0})=x_{0}$ and $\dot{x}(t_{0})=v_{0}$ an approximate numerical solution $x_{n} \approx x(t_{n})$ at the times $t_{n}=t_{0}+n \Delta t$ with step size $\Delta t > 0$ can be obtained by the following method:
-
-**Initialization:**
+and velocity
 
 $$
-x_1 = x_0 + v_0 \Delta t + \frac{1}{2} A(x_0) \Delta t^2
+\mathbf{v}_i =
+\begin{bmatrix}
+v_{x,i}\\
+v_{y,i}\\
+v_{z,i}
+\end{bmatrix}.
 $$
 
-**Iteration for $n = 1, 2, \dots$:**
+According to Newton's law of universal gravitation, the acceleration generated on particle $i$ by particle $j$ is
 
 $$
-x_{n+1} = 2x_n - x_{n-1} + A(x_n) \Delta t^2
+\mathbf{a}_{ij}
+=
+Gm_j
+\frac{\mathbf{r}_j-\mathbf{r}_i}
+{\left(\|\mathbf{r}_j-\mathbf{r}_i\|^2+\varepsilon^2\right)^{3/2}},
 $$
 
+where:
 
-## solar_system.txt
+- $G$ is the gravitational constant;
+- $\epsilon$ is the gravitational softening parameter.
 
-<div align="center">
-  
-![Schema Verlet](img/planets_animation.gif)
+The total acceleration of particle $i$ is therefore
 
-</div>
+$$
+\mathbf{a}_i
+=
+\sum_{\substack{j=0\\j\neq i}}^{N-1}
+\mathbf{a}_{ij}.
+$$
 
-The file to be provided within the code must have the following structure to be read consistently and correctly:
-the first line contains, in order:
-- **DIM** dimension of the space in which the problem is to be represented and evaluated,
-- the **time variation** **$\Delta t$**, and
-- the **total time interval** over which the problem is to be studied.
-In our study we chose a simpler case of 2 dimension plane and a variation time delta_t of 1 day(86400 seconds) and 10 years(3.155692608e8 seconds) for the total amount of time.
+The softening term prevents singular accelerations for particles at extremely small separation and can be configured from the command line.
 
-After that, the following lines list the various bodies, indicating:
-- their **name**
-- their **mass**
-- the components of the initial **position** (2 or 3 depending on the dimension chosen to represent), for which we decided to use the average distance from the Sun
-- the components of the initial **tangential velocity** (always 2 or 3), for which we decided to use the average velocity of each planet.
+Setting the softening to zero is also supported, provided that the simulated configuration does not generate singular interactions.
 
-In our case, for an initial analysis, we began by studying the case in 2 dimensions over a total time period of 10 years (total_period = 10(year)*365.2422(days per year)*24(hours per day)*60(minutes per hours)*60(seconds per minute) = 315'569'260.8 seconds) using a delta_t of 1 day = 86,400 seconds (24*60*60).
+A direct evaluation of this expression requires every particle to interact with every other particle, resulting in
+
+$$
+O(N^2)
+$$
+
+work per simulation step. This becomes prohibitively expensive for large particle counts.
+
+The main purpose of the Barnes-Hut algorithm used in this project is to reduce this computational cost.
+
+---
+
+# 2. Barnes-Hut approximation
+
+Barnes-Hut reduces the number of gravitational interactions by grouping sufficiently distant particles.
+
+The three-dimensional simulation domain is represented by an octree. Each internal node represents a cubic region of space and stores:
+
+- its geometric center;
+- its half-size;
+- its total mass;
+- its center of mass;
+- its parent;
+- references to up to eight children.
+
+Occupied leaves additionally identify the range of particles contained in the corresponding spatial cell.
+
+When evaluating the acceleration of one target particle, an internal octree node can either be:
+
+1. **opened**, causing its children to be inspected; or
+2. **accepted**, replacing all particles below that node with a single point mass located at the node center of mass.
+
+Leaves are always evaluated exactly.
+
+The approximation is controlled by the Barnes-Hut opening parameter
+
+$$
+\theta.
+$$
+
+Smaller values of $\theta$ cause more nodes to be opened and therefore increase accuracy at the cost of additional computation.
+
+Larger values allow more aggressive approximation and reduce execution time.
+
+The current implementation also accounts for the displacement between the geometric center of a cell and its actual center of mass. For a node of side length $s$, target-to-center-of-mass distance $d$, and center-to-center-of-mass displacement $\delta$, the node is accepted only when
+
+$$
+d > \frac{s}{\theta}+\delta.
+$$
+
+This criterion is more conservative for strongly asymmetric cells than the basic $s/d < \theta$ Barnes-Hut criterion.
+
+A node containing the target particle is never approximated as a single point mass.
+
+With $\theta = 0$, no internal node is accepted and the traversal behaves as an exact tree-based N-body calculation.
+
+---
+
+# 3. Time integration
+
+Particle trajectories are advanced with a leapfrog kick-drift-kick integrator.
+
+Leapfrog was selected because it is a second-order symplectic method and provides substantially better long-term behavior for gravitational systems than a first-order explicit method such as forward Euler.
+
+Given particle position $r_n$, velocity $v_n$, acceleration $a_n$, and timestep $\Delta t$, one complete step is
+
+$$
+\mathbf{v}_{n+\frac12}
+=
+\mathbf{v}_n
++
+\frac{\Delta t}{2}\mathbf{a}_n,
+$$
+
+$$
+\mathbf{r}_{n+1}
+=
+\mathbf{r}_n
++
+\Delta t\,\mathbf{v}_{n+\frac12},
+$$
+
+followed by reconstruction of the spatial structure and evaluation of the new acceleration
+
+$$
+\mathbf{a}_{n+1}
+=
+\mathbf{a}(\mathbf{r}_{n+1})
+$$,
 
 
-<div align="center">
- 
-![Schema Verlet](img/trajectory.png)
+and finally
 
+$$
+\mathbf{v}_{n+1}
+=
+\mathbf{v}_{n+\frac12}
++
+\frac{\Delta t}{2}\mathbf{a}_{n+1}.
+$$
 
-</div>
+The implementation follows this structure directly.
+
+After the drift modifies particle positions, the Morton ordering and octree are rebuilt before the next Barnes-Hut force computation.
+
+---
+
+# 4. GPU spatial pipeline
+
+The spatial structure is reconstructed every timestep because particle positions change continuously.
+
+The production pipeline is:
+
+```text
+Particle positions
+        |
+        v
+Global bounding box
+        |
+        v
+Coordinate normalization
+        |
+        v
+Morton key generation
+        |
+        v
+CUB radix sort (key, particle index)
+        |
+        v
+Morton leaf groups
+        |
+        v
+Karras radix tree
+        |
+        v
+Radix-tree to octree conversion
+        |
+        v
+Sparse octree topology
+        |
+        v
+Octree geometry
+        |
+        v
+Mass / center-of-mass propagation
+        |
+        v
+Barnes-Hut traversal
+        |
+        v
+Particle accelerations
+        |
+        v
+Leapfrog integration
+```
+
+Each stage has dedicated CUDA kernels and corresponding unit or integration tests.
+
+---
+
+# 5. Global bounding box
+
+Morton encoding requires particle coordinates to be mapped into a finite integer grid.
+
+At every rebuild, the global minimum and maximum particle coordinates are computed on the GPU.
+
+The resulting bounds define a cubic simulation region used to normalize all three spatial coordinates consistently.
+
+Using a cube instead of three independently scaled dimensions preserves the spatial meaning of the Morton representation.
+
+---
+
+# 6. Morton encoding
+
+Normalized particle coordinates are quantized onto a three-dimensional integer grid.
+
+The implementation uses 10 bits per coordinate, producing a 30-bit Morton code inside a 32-bit integer.
+
+For coordinates
+
+$$
+(x_q,y_q,z_q),
+$$
+
+their bits are interleaved to generate a Morton key.
+
+Morton ordering provides a one-dimensional representation that approximately preserves three-dimensional spatial locality: particles close in space tend to have similar Morton keys.
+
+This property is fundamental to several later optimizations.
+
+---
+
+# 7. GPU radix sorting
+
+Morton keys are sorted with
+
+```text
+cub::DeviceRadixSort::SortPairs
+```
+
+using pairs consisting of
+
+```text
+(Morton key, original particle index).
+```
+
+The particle index permutation is preserved throughout tree construction.
+
+This is essential because sorting only the Morton keys would destroy the relation between a tree leaf and the physical particle represented by that key.
+
+The sorted particle indices therefore provide both:
+
+- the spatial ordering used to build the tree;
+- the mapping between Morton order and the canonical particle order.
+
+---
+
+# 8. Morton leaf groups
+
+Multiple particles may share the same Morton key.
+
+This can happen when different particles fall into the same quantized spatial cell or when particles have identical positions.
+
+Instead of requiring every Morton key to be unique, consecutive equal keys are grouped into Morton leaf groups.
+
+Each group stores the corresponding sorted particle range.
+
+This makes duplicate Morton keys a supported input rather than a special failure case.
+
+---
+
+# 9. Karras radix tree
+
+The sorted Morton groups are first organized into a binary radix tree following the parallel construction principles described by Karras.
+
+For each internal node, the algorithm determines the range of Morton prefixes represented by the node and identifies the corresponding split.
+
+The GPU construction uses prefix information derived from the sorted keys and creates the complete radix-tree topology in parallel.
+
+Only the topology required for the later octree conversion is allocated in the simulation path. Physical quantities that are not used by the radix tree are intentionally omitted.
+
+---
+
+# 10. Sparse octree construction
+
+The binary radix tree is subsequently converted into a sparse three-dimensional octree.
+
+Unlike a dense octree, empty spatial cells are not allocated.
+
+Each octree node stores only existing children, reducing memory consumption for sparse particle distributions.
+
+The octree contains:
+
+- eight child references per node;
+- a parent reference;
+- level and prefix information;
+- leaf particle ranges;
+- node geometry;
+- physical mass and center-of-mass information.
+
+The root always represents the complete simulation bounding cube.
+
+---
+
+# 11. Octree geometry
+
+Once the topology is known, every octree node receives its geometric center and half-size.
+
+The geometry is derived from:
+
+- the global bounding box;
+- the node level;
+- the Morton/octant prefix represented by that node.
+
+The geometry is required by the Barnes-Hut acceptance criterion and is independent from the physical center of mass.
+
+---
+
+# 12. Mass and center of mass
+
+After topology and geometry are available, leaf masses and centers of mass are computed from the particles belonging to each leaf.
+
+For a node containing particles with masses $m_i$ and positions $r_i$,
+
+$$
+M = \sum_i m_i
+$$
+
+and
+
+$$
+\mathbf{r}_{CM}
+=
+\frac{1}{M}
+\sum_i m_i\mathbf{r}_i.
+$$
+
+Internal-node values are then propagated bottom-up.
+
+This computation is performed on the GPU.
+
+Zero-mass particles are supported. A zero-total-mass node produces no gravitational acceleration and can be skipped during traversal.
+
+---
+
+# 13. Stackless Barnes-Hut traversal
+
+An earlier version of the Barnes-Hut CUDA kernel used a private traversal stack for every CUDA thread.
+
+For the maximum octree depth used by the project, this required an array equivalent to approximately
+
+```text
+int stack[71]
+```
+
+per thread.
+
+Compiler inspection showed a 288-byte stack frame for the kernel.
+
+The final implementation uses a stackless depth-first traversal instead.
+
+Each octree node already stores:
+
+- its parent;
+- its children.
+
+These links are sufficient to find:
+
+- the first child of an opened node;
+- the next sibling;
+- the next ancestor containing an unvisited sibling.
+
+The explicit per-thread stack was therefore removed.
+
+The optimized kernel has no equivalent large traversal-stack allocation and avoids the associated local-memory pressure.
+
+The traversal order was kept consistent with the previous implementation to preserve deterministic behavior.
+
+---
+
+# 14. Morton-ordered Barnes-Hut targets
+
+A major source of CUDA inefficiency in a tree algorithm is warp divergence.
+
+If adjacent CUDA threads process particles that are spatially unrelated, they are likely to traverse very different paths through the octree.
+
+The simulation instead assigns target particles to threads in sorted Morton order.
+
+Consequently, consecutive threads in a warp normally process spatially close particles.
+
+This increases the probability that those threads make similar Barnes-Hut open/accept decisions during the upper levels of traversal.
+
+The final acceleration is still written to the original particle index, so the rest of the simulator retains its canonical particle ordering.
+
+---
+
+# 15. Morton-ordered physical particle data
+
+Morton ordering of the target threads improves traversal coherence, but an initial version still accessed particle coordinates through indirect indexing:
+
+```text
+sorted index
+     |
+     v
+original particle index
+     |
+     v
+x[index], y[index], z[index], mass[index]
+```
+
+Nsight Compute showed a large number of inefficient memory transactions and significant latency associated with the irregular traversal and particle access pattern.
+
+The final implementation therefore maintains persistent simulation buffers containing
+
+```text
+mass
+x
+y
+z
+```
+
+in Morton order specifically for Barnes-Hut evaluation.
+
+After the Morton permutation is generated, a CUDA gather kernel fills these buffers.
+
+Barnes-Hut can then access particles inside a Morton leaf directly through their sorted position, while acceleration output is still mapped back to the original particle index.
+
+This preserves the canonical state required by the integrator while improving memory locality inside the force calculation.
+
+The cost of the gather is included in the measured simulation step time.
+
+---
+
+# 16. Data layout and memory management
+
+Particle and octree data use a structure-of-arrays layout.
+
+Instead of storing
+
+```text
+Particle {
+    x, y, z,
+    vx, vy, vz,
+    mass
+}
+```
+
+as a single array of structures, individual quantities are stored in separate contiguous arrays.
+
+This representation is suitable for CUDA because kernels often access one quantity for many particles simultaneously.
+
+CUDA allocations owned by tree and octree structures are managed through RAII-style device buffers.
+
+This reduces the number of raw owning pointers and ensures that device allocations are released correctly when structures are destroyed or when construction fails.
+
+Spatial structures are staged before being committed to the active simulation state, preventing a failed rebuild from partially replacing a valid octree.
+
+---
+
+# 17. CUDA launch configuration
+
+The project originally used a fixed CUDA architecture.
+
+The current CMake configuration uses
+
+```text
+CMAKE_CUDA_ARCHITECTURES=native
+```
+
+when the caller does not explicitly provide an architecture.
+
+This makes local builds target the installed GPU while still allowing cluster or CI builds to override the architecture.
+
+Nsight Compute was also used to tune the Barnes-Hut block size.
+
+For the RTX 3070 used during profiling, the Barnes-Hut kernel required approximately
+
+```text
+50 registers / thread
+```
+
+and a 256-thread block produced:
+
+```text
+Theoretical occupancy: 66.67 %
+Achieved occupancy:    59.19 %
+```
+
+Reducing the block size to 128 threads increased the values to approximately
+
+```text
+Theoretical occupancy: 75.00 %
+Achieved occupancy:    65.39 %
+```
+
+and produced a small but reproducible improvement in complete simulation time.
+
+A 96-thread configuration was also tested and was slower, therefore 128 threads per block is used by the final Barnes-Hut kernel.
+
+---
+
+# 18. Performance analysis
+
+Profiling was performed with NVIDIA Nsight Systems and Nsight Compute.
+
+The Barnes-Hut kernel reached approximately
+
+```text
+Compute (SM) throughput: 83 %
+```
+
+on the development RTX 3070, while reported DRAM utilization remained comparatively low.
+
+The result indicates that the traversal is primarily limited by computation, control flow, and latency rather than by raw DRAM bandwidth.
+
+Nsight Compute also measured approximately
+
+```text
+10.7 active threads per 32-thread warp
+```
+
+during traversal.
+
+The remaining divergence is expected for Barnes-Hut because different target particles eventually follow different paths through the octree even after Morton ordering.
+
+This represents one of the principal opportunities for future optimization.
+
+---
+
+# 19. Benchmark results
+
+Representative benchmarks were performed on:
+
+```text
+GPU:       NVIDIA GeForce RTX 3070 8 GB
+CUDA:      12.5
+Platform:  WSL2 / Linux
+Precision: double
+theta:     0.5
+dt:        0.001
+softening: 1e-6
+```
+
+Each result below is the median of three runs with 10 simulation steps.
+
+| Particles | Average time per step |
+|---:|---:|
+| 100,000 | approximately **249 ms** |
+| 250,000 | approximately **798 ms** |
+
+The Morton-ordered physical particle layout was measured separately against the immediately preceding optimized version.
+
+| Particles | Previous layout | Morton physical layout | Improvement |
+|---:|---:|---:|---:|
+| 100,000 | 267.96 ms/step | 249.17 ms/step | ~7.0% |
+| 250,000 | 1031.84 ms/step | 797.90 ms/step | ~22.7% |
+
+These measurements include the gather operation required to construct the Morton-ordered physical buffers. They therefore represent a complete simulation-step improvement rather than an isolated kernel measurement.
+
+The improvement increases with particle count, making the optimized layout particularly valuable for the larger systems targeted by the project.
+
+Benchmark timings are hardware- and dataset-dependent and should not be interpreted as universal performance values.
+
+---
+
+# 20. Validation
+
+Correctness was treated as a separate requirement from performance.
+
+The current test suite contains **111 tests** covering CPU components, CUDA kernels, complete GPU pipelines, numerical integration, input validation, and physical accuracy.
+
+Important tested cases include:
+
+- global bounding-box computation;
+- Morton coordinate normalization and quantization;
+- Morton key generation;
+- radix sorting and permutation preservation;
+- duplicate Morton keys;
+- Morton leaf groups;
+- Karras radix-tree construction;
+- exact tree topology for small deterministic inputs;
+- random tree construction;
+- radix-tree to octree conversion;
+- sparse-octree construction;
+- node geometry;
+- leaf mass and center of mass;
+- bottom-up internal-node center of mass;
+- Barnes-Hut traversal;
+- exact Barnes-Hut behavior for \(\theta=0\);
+- approximation of distant clusters;
+- opening of asymmetric clusters;
+- singular-interaction detection;
+- configurable softening;
+- configurable \(\theta\);
+- leapfrog integration;
+- two-body orbital motion;
+- generated deterministic particle systems;
+- solar-system ephemeris comparison;
+- particle input validation;
+- NaN and infinity rejection;
+- negative-mass rejection;
+- zero-mass particle support;
+- command-line simulation behavior.
+
+The complete suite passes after the final Morton-layout optimization.
+
+---
+
+# 21. CUDA memory and race validation
+
+CUDA tests were additionally executed under NVIDIA Compute Sanitizer.
+
+The project was checked with:
+
+- `memcheck`;
+- full leak checking;
+- `racecheck`.
+
+The final validation produced:
+
+```text
+0 memory errors
+0 reported leaks
+0 race hazards
+```
+
+The sanitizer runtime is significantly longer than normal test execution because CUDA kernels are instrumented. Sanitizer execution times therefore do not represent normal simulation performance.
+
+---
+
+# 22. Numerical accuracy
+
+Barnes-Hut introduces a controlled force approximation through \(\theta\), whereas leapfrog introduces a time-discretization error through \(\Delta t\).
+
+These two parameters control different sources of error.
+
+Reducing $\theta$:
+
+- opens more octree nodes;
+- approaches direct N-body force evaluation;
+- increases runtime.
+
+Reducing $\Delta t$:
+
+- improves temporal resolution;
+- reduces leapfrog integration error;
+- increases the number of required simulation steps.
+
+The test suite therefore includes both force-accuracy tests and time-integration tests.
+
+Two-body orbit tests verify the interaction between force evaluation and leapfrog integration, while the solar-system ephemeris test compares a simulated state against an independently generated reference epoch.
+
+---
+
+# 23. Computational complexity
+
+The direct N-body algorithm requires
+
+$$
+O(N^2)
+$$
+
+pair interactions per timestep.
+
+Barnes-Hut instead builds a hierarchy of spatial cells and, for typical non-pathological distributions, reduces force evaluation toward approximately
+
+\[
+O(N\log N).
+\]
+
+The project additionally performs:
+
+- Morton-key construction;
+- radix sorting;
+- radix-tree construction;
+- octree conversion;
+- physical-data propagation.
+
+These operations are GPU-parallel and scale linearly or near-linearly with the number of particles for the fixed-width Morton representation.
+
+The spatial structure must currently be rebuilt after every drift step because particle positions have changed.
+
+---
+
+# 24. Current limitations and possible future work
+
+The project intentionally prioritizes correctness and a complete GPU implementation over more invasive research-level optimizations.
+
+Several extensions remain possible.
+
+### Warp-cooperative traversal
+
+Despite Morton ordering, Nsight Compute still reports substantial control-flow divergence during Barnes-Hut traversal.
+
+A future implementation could assign one spatial packet to an entire warp and use CUDA warp primitives such as
+
+```text
+__ballot_sync
+__any_sync
+__all_sync
+```
+
+to make cooperative tree-traversal decisions.
+
+This could improve the low number of simultaneously active threads measured during the current independent-thread traversal.
+
+### Improved octree memory locality
+
+The remaining uncoalesced memory accesses are largely associated with threads visiting different octree nodes.
+
+Reordering octree nodes according to traversal or spatial order could improve cache locality.
+
+### Reusable tree allocations
+
+The current implementation stages a new spatial structure before replacing the previous one.
+
+This provides strong failure safety but requires multiple CUDA allocations during every rebuild.
+
+Capacity-based reusable buffers could reduce allocation overhead.
+
+### Further Barnes-Hut MAC optimization
+
+Part of the acceptance criterion depends only on node data and could be precomputed when the octree physical data is generated.
+
+This would trade a small amount of memory for fewer repeated floating-point operations during traversal.
+
+### Conserved-quantity monitoring
+
+Long simulations could additionally report:
+
+- total energy;
+- total linear momentum;
+- total angular momentum;
+
+and track their relative drift over time.
+
+### Multi-GPU execution
+
+The current force solver targets one CUDA GPU.
+
+Large cluster simulations could be extended through spatial domain decomposition, MPI communication, and one GPU per MPI rank.
+
+---
+
+# 25. Repository structure
+
+The main project directories are organized as follows:
+
+```text
+apps/
+    simulation/          CUDA simulation executable
+    viewer/              Metal visualization application
+    stream_server/       frame-streaming server
+    stream_client/       frame-streaming client
+
+gpu/cuda_kernels/
+    barnes_hut.cu
+    globalbounding.cu
+    integrator.cu
+    morton.cu
+    morton_leaf_groups.cu
+    octree_builder.cu
+    octree_geometry.cu
+    octree_physics.cu
+    radix_to_octree.cu
+    simulation.cu
+    tree_builder.cu
+
+src/
+    public interfaces and data structures
+    simulation orchestration
+    particle loading
+    streaming implementation
+
+tests/
+    unit/
+    integration/
+    scripts/
+
+data/
+    synthetic-data generation
+    solar-system data generation
+```
+
+The separation between topology construction, physical node data, Barnes-Hut traversal, and integration makes the individual stages independently testable.
+
+---
 
 ## Simulation executable
 
@@ -80,8 +856,8 @@ Run a fixed number of shared leapfrog timesteps with:
 ```
 
 Use `./build/simulation/nbody --help` for the complete command-line help.
-The input must use the planar binary particle format documented below. The
-executable advances particles in memory unless `--stream-dir` or `--cluster`
+The input must use the binary particle format documented below. The executable
+advances particles in memory unless `--stream-dir` or `--cluster`
 enables graphical snapshots.
 
 ## Headless cluster frame streaming
@@ -267,14 +1043,17 @@ direction. The title bar displays `Step current/total`; when `--total-steps`
 is omitted, the unknown total is displayed as `?`.
 
 ## Generate Galaxy Data
+
 The script `data/generate_galaxy.py` creates synthetic binary datasets for the galaxy viewer and the large-particle loader. Particles generated by the galaxy and two-body modes are classified as stars.
 
 Run it from the project root with:
+
 ```bash
 python3 data/generate_galaxy.py --galaxy spiral -n 100000 -o data/milky_way_like.bin
 ```
 
 Available options:
+
 - ```--galaxy globular|spiral|two-body``` selects the initial-condition type.
 - ```--shape natural|heart|smile``` changes the projected XY shape. The default is ```natural```.
 - ```--num-arms N``` sets the number of spiral arms when ```--galaxy spiral``` is used. The default is ```4```.
@@ -285,6 +1064,7 @@ Available options:
 - ```--seed``` makes the generated dataset reproducible.
 
 Examples:
+
 ```bash
 python3 data/generate_galaxy.py --galaxy spiral --num-arms 3 -n 5000000 -o data/milky_way_like_5M.bin
 python3 data/generate_galaxy.py --galaxy globular --shape heart -n 100000 -o data/globular_heart.bin
@@ -306,6 +1086,7 @@ for 128 steps per orbit. Run the resulting file with, for example:
 ```
 
 Binary format:
+
 - the first 8 bytes are the number of particles stored as little-endian ```uint64```
 - then all ```mass``` components
 - then all ```x``` coordinates
@@ -357,24 +1138,15 @@ day, all resulting 3D positions and velocities are checked against epoch B.
 Per-body tolerances account for the moons deliberately omitted from this test.
 
 ## External tool
-We have and external script writing in python to export an image of the plot about our simulation.
 
-In order to run it you have to execute
-```
-python3 plt_trajectory.py
-```
-from the ```src``` directory
+We have an external Python script that exports images and plots from simulation output.
 
-The image can be seen as ```/build/trajectory.png```
+# References
 
+All the papers we followed and took insipation from are in the repository: 
 
-# The general issue we had
-In our initial study with the Euler method we found a problem when representing the trajectories as they did not seem to be precise and to respect the correct progression of the planets.
-For this reason we decided to adopt and study our case by applying the Verlet integration, which is a numerical method used to integrate Newton's equations of motion.
-The Verlet integrator provides good numerical stability, as well as other properties that are important in physical systems such as time reversibility and preservation of the symplectic form on phase space (maintain the fundamental geometric structure of phase space intact, avoiding energy drift and ensuring long-term stability), at no significant additional computational cost over the simple Euler method.
-Euler’s error tends to accumulate dramatically, often causing solutions to “blow up.”
-The Verlet method, thanks to its time-symmetric structure, is much more stable, and moreover it has a smaller overall error:
-
-•	Euler: local error of order 1 → global error O(Δt)
-
-•	Verlet: local error of order 2 → global error O(Δt²)
+- FMMsimple.pdf
+- NBody_Description.pdf
+- NumericalSolNBody.pdf
+- karras2012hpg_paper.pdf
+- Tree construction bonsai algo.pdf
