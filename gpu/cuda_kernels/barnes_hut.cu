@@ -11,16 +11,6 @@
 
 namespace
 {
-    // During a depth-first traversal, at each level we may leave at most
-    // seven siblings on the stack while descending through the eighth child.
-    //
-    // With a maximum octree depth of 10:
-    //
-    //     1 + 7 * 10 = 71
-    //
-    // entries are sufficient for a valid octree.
-    constexpr int kTraversalStackCapacity = 1 + 7 * kOctreeMaxLevel;
-
     void checkCuda(cudaError_t error, const char* operation)
     {
         if (error != cudaSuccess)
@@ -42,7 +32,7 @@ namespace
                 return "Sorted particle index is outside the particle array";
 
             case 4:
-                return "Barnes-Hut traversal stack overflow";
+                return "Barnes-Hut traversal found inconsistent parent-child topology";
 
             case 5:
                 return "Barnes-Hut traversal found an empty terminal node";
@@ -97,6 +87,79 @@ __device__ bool nodeContainsTarget(const ConstOctreeView& octree, int node, doub
     return fabs(targetX - octree.centerX[node]) <= halfSize && fabs(targetY - octree.centerY[node]) <= halfSize && fabs(targetZ - octree.centerZ[node]) <= halfSize;
 }
 
+__device__ int firstTraversalChild(const ConstOctreeView& octree, int node, int* errorCode)
+{
+    // The old explicit stack pushed children 0 -> 7 and therefore
+    // visited them in LIFO order 7 -> 0. Preserve that ordering.
+    for (int octant = 7; octant >= 0; --octant)
+    {
+        const int child = octree.children[node * 8 + octant];
+
+        if (child == -1)
+            continue;
+
+        if (child <= 0 || child >= octree.nNodes)
+        {
+            atomicCAS(errorCode, 0, 1);
+            return -2;
+        }
+
+        return child;
+    }
+
+    atomicCAS(errorCode, 0, 5);
+    return -2;
+}
+
+
+__device__ int nextTraversalNode(const ConstOctreeView& octree, int node, int* errorCode)
+{
+    while (node != octree.root)
+    {
+        const int parent = octree.parent[node];
+
+        if (parent < 0 || parent >= octree.nNodes)
+        {
+            atomicCAS(errorCode, 0, 4);
+            return -2;
+        }
+
+        bool foundCurrent = false;
+
+        // Preserve the same 7 -> 0 visitation order as the old stack.
+        for (int octant = 7; octant >= 0; --octant)
+        {
+            const int child = octree.children[parent * 8 + octant];
+
+            if (child == -1)
+                continue;
+
+            if (child <= 0 || child >= octree.nNodes)
+            {
+                atomicCAS(errorCode, 0, 1);
+                return -2;
+            }
+
+            if (foundCurrent)
+                return child;
+
+            if (child == node)
+                foundCurrent = true;
+        }
+
+        if (!foundCurrent)
+        {
+            atomicCAS(errorCode, 0, 4);
+            return -2;
+        }
+
+        // No more siblings at this level: climb one level.
+        node = parent;
+    }
+
+    // Root subtree completely visited.
+    return -1;
+}
 
 __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const std::uint32_t* sortedIndices, const double* particleMass, const double* positionX, const double* positionY, const double* positionZ, double* accelerationX, double* accelerationY, double* accelerationZ, double theta, double softeningSquared, double gravitationalConstant, int* errorCode)
 {
@@ -122,14 +185,11 @@ __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const
     double ax = 0.0;
     double ay = 0.0;
     double az = 0.0;
-    int stack[kTraversalStackCapacity];
-    int stackSize = 0;
+    
+    int node = octree.root;
 
-    stack[stackSize++] = octree.root;
-
-    while (stackSize > 0)
+    while (node >= 0)
     {
-        const int node = stack[--stackSize];
         const double halfSize = octree.halfSize[node];
 
         if (halfSize <= 0.0)
@@ -182,6 +242,12 @@ __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const
                     return;
                 }
             }
+
+            node = nextTraversalNode(octree, node, errorCode);
+
+            if (node == -2)
+                return;
+
             continue;
         }
 
@@ -190,8 +256,15 @@ __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const
 
         // A zero-mass node cannot contribute to the acceleration.
         if (nodeMass == 0.0)
-            continue;
+        {
+            node = nextTraversalNode(octree, node, errorCode);
 
+            if (node == -2)
+                return;
+            
+            continue;
+        }
+           
         const double dx = octree.comX[node] - targetX;
         const double dy = octree.comY[node] - targetY;
         const double dz = octree.comZ[node] - targetZ;
@@ -222,40 +295,19 @@ __global__ void computeBarnesHutAccelerationKernel(ConstOctreeView octree, const
                 atomicCAS(errorCode, 0, 6);
                 return;
             }
+
+            node = nextTraversalNode(octree, node, errorCode);
+
+            if (node == -2)
+                return;
+
             continue;
         }
 
-        int childCount = 0;
+        node = firstTraversalChild(octree, node, errorCode);
 
-        for (int octant = 0; octant < 8; ++octant)
-        {
-            const int child = octree.children[node * 8 + octant];
-
-            if (child == -1)
-                continue;
-
-            // Node zero is the root
-            if (child <= 0 || child >= octree.nNodes)
-            {
-                atomicCAS(errorCode, 0, 1);
-                return;
-            }
-
-            if (stackSize >= kTraversalStackCapacity)
-            {
-                atomicCAS(errorCode, 0, 4);
-                return;
-            }
-
-            stack[stackSize++] = child;
-            ++childCount;
-        }
-
-        if (childCount == 0)
-        {
-            atomicCAS(errorCode, 0, 5);
+        if (node == -2)
             return;
-        }
     }
 
     // Each CUDA thread owns exactly one target particle, so no atomics are required for acceleration output.
@@ -276,7 +328,7 @@ void computeBarnesHutAcceleration(const Octree& octree, const std::uint32_t* d_s
         throw std::invalid_argument("Particle count does not match the octree");
     
     // Topology required by traversal.
-    if (octree.children.data() == nullptr || octree.firstParticle.data() == nullptr || octree.particleCount.data() == nullptr)
+    if (octree.children.data() == nullptr || octree.parent.data() == nullptr || octree.firstParticle.data() == nullptr || octree.particleCount.data() == nullptr)
         throw std::logic_error("Octree topology arrays required for traversal are not allocated");
    
     // Physical data required by Barnes-Hut approximation.
