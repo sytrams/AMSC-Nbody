@@ -262,9 +262,12 @@ int main(int argc, char **argv) {
     std::cout << "Loaded " << particleCount << " particles from "
               << options.inputPath << '\n';
 
-    const auto start = std::chrono::steady_clock::now();
+    const auto initializationStart = std::chrono::steady_clock::now();
     simulation.initialize();
-    const auto sampleClockStart = std::chrono::steady_clock::now();
+    const auto initializationFinish = std::chrono::steady_clock::now();
+    const std::chrono::duration<double> initializationElapsed = initializationFinish - initializationStart;
+    const auto sampleClockStart = initializationFinish;
+    const auto evolutionStart = initializationFinish;
     std::size_t lastCapturedStep = std::numeric_limits<std::size_t>::max();
 
     auto captureFrame = [&](bool force) {
@@ -288,13 +291,22 @@ int main(int argc, char **argv) {
     }
     if (frameSampler && lastCapturedStep != simulation.stepNumber())
       captureFrame(true);
-    const auto finish = std::chrono::steady_clock::now();
-    const std::chrono::duration<double> elapsed = finish - start;
+    const auto evolutionFinish = std::chrono::steady_clock::now();
+    const std::chrono::duration<double> evolutionElapsed = evolutionFinish - evolutionStart;
+    const std::chrono::duration<double> totalElapsed = evolutionFinish - initializationStart;
+    const double averageStepMilliseconds = 1000.0 * evolutionElapsed.count() / static_cast<double>(options.steps);
 
     std::cout << std::setprecision(17) << "Simulation complete\n"
               << "  steps: " << simulation.stepNumber() << '\n'
               << "  simulated time: " << simulation.time() << '\n'
-              << "  wall time: " << elapsed.count() << " seconds\n";
+              << "  initialization wall time: "
+              << initializationElapsed.count() << " seconds\n"
+              << "  evolution wall time: "
+              << evolutionElapsed.count() << " seconds\n"
+              << "  average step time: "
+              << averageStepMilliseconds << " ms\n"
+              << "  total wall time: "
+              << totalElapsed.count() << " seconds\n";
     if (frameSpool) {
       std::cout << "  frames written: " << framesWritten << '\n'
                 << "  particles per frame: "
