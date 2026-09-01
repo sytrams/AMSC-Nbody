@@ -941,7 +941,11 @@ automatically loops the run after the simulator publishes its completion
 marker. Particle types are rendered distinctly as stars, planets, moons,
 asteroids/small bodies, or legacy unknown bodies.
 
-Build and launch it with the convenience wrapper:
+### Start the viewer
+
+Run the viewer on a node that can read the frame directory. The convenience
+wrapper configures and builds the host-only executable when necessary, then
+keeps the HTTP server in the foreground:
 
 ```bash
 ./scripts/run-browser-viewer.sh /shared/path/to/run-frames \
@@ -949,25 +953,126 @@ Build and launch it with the convenience wrapper:
   --port 8080
 ```
 
-The process prints the browser URLs it can detect. On a cluster, keep the
-default loopback bind and forward the port over SSH:
+Keep this process running for as long as the browser should remain connected.
+The printed cluster URL describes the listener, but the local browser should
+normally use the forwarded `127.0.0.1` URL described below.
+
+For a live simulation, start the simulator and viewer inside the same scheduled
+job so they share the compute node and frame directory:
 
 ```bash
-ssh -N -L 8080:127.0.0.1:8080 user@cluster-node
+RUN_DIR="${SCRATCH:-$PWD}/nbody-browser-${PBS_JOBID:-manual}"
+mkdir -p "$RUN_DIR"
+
+./build/simulation/nbody \
+  --input data/initial.bin \
+  --time-step 0.001 \
+  --steps 100000 \
+  --stream-dir "$RUN_DIR" \
+  --sample-rate 30 &
+SIMULATION_PID=$!
+
+./scripts/run-browser-viewer.sh "$RUN_DIR" \
+  --bind 127.0.0.1 \
+  --port 8080 &
+VIEWER_PID=$!
+
+printf 'Viewer compute node: %s\n' "$(hostname)"
+wait "$SIMULATION_PID"
+printf 'Simulation complete; viewer continues loop playback.\n'
+wait "$VIEWER_PID"
 ```
 
-Then open `http://127.0.0.1:8080` locally. Binding to `0.0.0.0` is also
-supported when the cluster network and firewall explicitly permit inbound
-connections, but the viewer has no built-in authentication.
+Use `--stream-dir` without `--cluster` for retained browser playback. The raw
+transfer server started by `--cluster` removes a frame after its download
+client acknowledges it.
+
+### Open an SSH tunnel
+
+Connect the VPN first when the cluster is reachable only from its institutional
+network. Do not open the cluster listener directly to the Internet.
+
+If the viewer runs on the same login host reached by SSH, open a second terminal
+on the local machine and run:
+
+```bash
+ssh -o ExitOnForwardFailure=yes \
+  -N \
+  -L 8080:127.0.0.1:8080 \
+  <username>@<login-host>
+```
+
+The tunnel command normally prints nothing while it is working. Keep it open
+and visit `http://127.0.0.1:8080` in the local browser.
+
+If the viewer runs on a compute node and SSH access to that node is supported,
+forward through the login host with `ProxyJump`:
+
+```bash
+ssh -o ExitOnForwardFailure=yes \
+  -J <username>@<login-host> \
+  -N \
+  -L 8080:127.0.0.1:8080 \
+  <username>@<compute-host>
+```
+
+`<compute-host>` is the value printed by `hostname` inside the scheduled job.
+This form permits the viewer to remain bound to compute-node loopback.
+
+If the cluster prohibits SSH sessions to compute nodes, bind the viewer to the
+compute node's internal interface instead:
+
+```bash
+./scripts/run-browser-viewer.sh "$RUN_DIR" \
+  --bind 0.0.0.0 \
+  --port 8080
+```
+
+Then forward from the login host to that compute node:
+
+```bash
+ssh -o ExitOnForwardFailure=yes \
+  -N \
+  -L 8080:<compute-host>:8080 \
+  <username>@<login-host>
+```
+
+This fallback exposes the viewer port to the internal cluster network, so use
+it only when the cluster firewall isolates compute nodes. The viewer has no
+built-in authentication.
+
+If local port 8080 is already occupied, change only the first port in `-L`, for
+example `-L 8081:127.0.0.1:8080`, and open
+`http://127.0.0.1:8081`.
+
+### Verify and troubleshoot the connection
+
+First verify the viewer on the node where it was launched:
+
+```bash
+pgrep -af nbody_browser_viewer
+ss -ltn | grep ':8080'
+curl http://127.0.0.1:8080/api/health
+```
+
+Then verify the tunnel on the local machine:
+
+```bash
+lsof -nP -iTCP:8080 -sTCP:LISTEN
+curl http://127.0.0.1:8080/api/health
+```
+
+A browser `connection refused`, `connection reset`, or SSH
+`open failed: connect failed: Connection refused` message normally means the
+SSH tunnel itself is present but its remote destination is wrong: the viewer is
+not running, the port numbers differ, or the tunnel targets the login node
+while the viewer runs on a compute node. Check the viewer process, listener,
+compute hostname, and both sides of the `-L` mapping in that order.
 
 Browser controls mirror the native viewer: drag to orbit, Shift-drag or
 right-drag to shift the focus, arrow keys or vertical scrolling to pan,
 Control+scroll or Control+Plus/Minus to zoom, `R` to fit/reset the view, and
 Space/timeline/speed controls for completed-run playback.
-
-For retained browser playback, run the simulator with `--stream-dir` and
-without `--cluster`: the raw transfer server started by `--cluster` removes a
-frame after its download client acknowledges it.
 
 ## Headless cluster frame streaming
 

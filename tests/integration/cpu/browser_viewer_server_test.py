@@ -72,7 +72,15 @@ def main() -> int:
             status, html, headers = request(f"{base_url}/")
             assert status == 200
             assert b'id="simulation-canvas"' in html
+            assert b'type="module"' in html
             assert "default-src 'self'" in headers["Content-Security-Policy"]
+
+            status, parser_module, headers = request(
+                f"{base_url}/frame_parser.mjs"
+            )
+            assert status == 200
+            assert headers["Content-Type"].startswith("text/javascript")
+            assert b"export function parseFrame" in parser_module
 
             status, body, _ = request(f"{base_url}/api/frames")
             assert status == 200

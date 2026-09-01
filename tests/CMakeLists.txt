@@ -72,6 +72,21 @@ if(TARGET nbody::streaming)
     endif()
 endif()
 
+find_program(NBODY_NODE_EXECUTABLE NAMES node)
+if(TARGET nbody_browser_viewer AND NBODY_NODE_EXECUTABLE)
+    add_test(
+        NAME "cpu.BrowserFrameParserTest"
+        COMMAND
+            ${NBODY_NODE_EXECUTABLE}
+            "${PROJECT_SOURCE_DIR}/tests/unit/javascript/browser_frame_parser_test.mjs"
+            "${PROJECT_SOURCE_DIR}/apps/browser_viewer/web/frame_parser.mjs")
+    set_tests_properties(
+        "cpu.BrowserFrameParserTest"
+        PROPERTIES
+            LABELS "cpu-unit"
+            TIMEOUT 30)
+endif()
+
 # The data tools depend on NumPy. Register their standard-library unittests
 # when both Python and that optional runtime dependency are available.
 find_package(Python3 COMPONENTS Interpreter QUIET)
