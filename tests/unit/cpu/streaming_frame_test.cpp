@@ -94,13 +94,50 @@ TEST_F(StreamingFrameTest, AtomicallyWritesSelfDescribingPositionFrame) {
   EXPECT_EQ(header.scalarBytes, sizeof(float));
 
   std::ifstream input(frame, std::ios::binary);
-  input.seekg(nbody::streaming::kFrameHeaderBytes);
+  input.seekg(header.headerBytes);
   std::array<float, 6> payload{};
   input.read(reinterpret_cast<char *>(payload.data()),
              static_cast<std::streamsize>(sizeof(payload)));
   ASSERT_TRUE(input.good());
   EXPECT_EQ(payload, (std::array<float, 6>{1.25F, 3.5F, -5.0F, -2.5F,
                                            4.75F, 6.125F}));
+}
+
+TEST_F(StreamingFrameTest, WritesTypedFrameWithTotalStepCount) {
+  const std::array<float, 6> positions{1.0F, 2.0F, 3.0F,
+                                        4.0F, 5.0F, 6.0F};
+  const std::array<std::uint8_t, 2> types{1, 2};
+  nbody::streaming::FrameSpool spool(directory, "typed-session");
+
+  const auto frame = spool.writeTypedPositions(
+      3, 7, 1.25, 40, 2,
+      [&](std::size_t offset, std::size_t count, float *output) {
+        std::copy_n(positions.data() + offset * 3, count * 3, output);
+      },
+      [&](std::size_t offset, std::size_t count, std::uint8_t *output) {
+        std::copy_n(types.data() + offset, count, output);
+      },
+      20);
+
+  const auto header = nbody::streaming::readFrameHeader(frame);
+  EXPECT_EQ(header.version, 2);
+  EXPECT_EQ(header.headerBytes, nbody::streaming::kFrameHeaderBytes);
+  EXPECT_EQ(header.sequence, 3);
+  EXPECT_EQ(header.simulationStep, 7);
+  EXPECT_EQ(header.totalSteps, 40);
+  EXPECT_EQ(header.particleCount, 2);
+  EXPECT_EQ(header.payloadBytes, sizeof(positions) + types.size());
+
+  std::ifstream input(frame, std::ios::binary);
+  input.seekg(header.headerBytes);
+  std::array<float, 6> actualPositions{};
+  std::array<std::uint8_t, 2> actualTypes{};
+  input.read(reinterpret_cast<char *>(actualPositions.data()),
+             static_cast<std::streamsize>(sizeof(actualPositions)));
+  input.read(reinterpret_cast<char *>(actualTypes.data()),
+             static_cast<std::streamsize>(actualTypes.size()));
+  EXPECT_EQ(actualPositions, positions);
+  EXPECT_EQ(actualTypes, types);
 }
 
 TEST_F(StreamingFrameTest, RemovesPartialFileWhenCaptureFails) {

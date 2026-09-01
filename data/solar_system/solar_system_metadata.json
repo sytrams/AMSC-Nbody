@@ -1,0 +1,46 @@
+{
+  "asteroid_count": 1559956,
+  "asteroid_model": "MPC heliocentric J2000-ecliptic osculating elements propagated independently with a two-body Kepler model, rotated to ICRF, then translated by the HORIZONS barycentric Sun state",
+  "coordinates": "Solar-System-barycentric ICRF Cartesian",
+  "epoch_a": {
+    "input": "2026-08-26T00:00:00",
+    "jd_tdb": 2461278.5
+  },
+  "epoch_b": {
+    "input": "2026-09-25T00:00:00",
+    "jd_tdb": 2461308.5
+  },
+  "format": "AMSC-Nbody planar little-endian: uint64 count header, seven float64 blocks, then one uint8 particle-type block",
+  "major_body_count": 468,
+  "manifest": "data/solar_system/solar_system_objects.csv.gz",
+  "mass_model": {
+    "assumed_albedo": 0.14,
+    "assumed_density_kg_m3": 2000.0,
+    "estimated_from_H_count": 1559768,
+    "fallback_count": 161,
+    "known_gm_count": 27,
+    "unknown_asteroid_mass_kg": 0.0,
+    "unknown_major_body_gm_policy": "massless test particle"
+  },
+  "output_a": "data/solar_system/solar_system_epoch_a.bin",
+  "output_b": "data/solar_system/solar_system_epoch_b.bin",
+  "particle_count": 1560424,
+  "skipped_invalid_asteroid_orbits": 0,
+  "skipped_major_bodies": [
+    {
+      "error": "HORIZONS did not return vectors: No ephemeris for target \"Daphnis\" after A.D. 2018-JAN-17 00:00:00.0000 TDB",
+      "name": "Daphnis",
+      "spkid": 635
+    }
+  ],
+  "sources": {
+    "asteroid_orbits": "https://minorplanetcenter.net/Extended_Files/mpcorb_extended.json.gz",
+    "major_body_gm": "https://ssd.jpl.nasa.gov/ftp/xfr/gm_Horizons.pck",
+    "major_body_states": "https://ssd.jpl.nasa.gov/api/horizons.api"
+  },
+  "units": {
+    "mass": "kg",
+    "position": "m",
+    "velocity": "m/s"
+  }
+}

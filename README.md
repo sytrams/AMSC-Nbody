@@ -26,7 +26,7 @@ The final simulation pipeline includes:
 - CUDA integration and physical-accuracy tests;
 - Compute Sanitizer validation;
 - headless frame streaming for cluster execution;
-- a Metal viewer for local visualization.
+- a playback-capable Metal viewer for live and archived simulations.
 
 ---
 
@@ -854,6 +854,83 @@ The input must use the binary particle format documented below. The executable
 advances particles in memory unless `--stream-dir` or `--cluster`
 enables graphical snapshots.
 
+## Metal viewer
+
+The playback-capable native macOS application lives in `apps/viewer`. It can
+follow a live stream, loop an archived simulation, or inspect one snapshot. It
+is separate from the simulator and never opens as a side effect of running
+tests.
+
+Configure and build it from the repository root:
+
+```bash
+cmake -S . -B build/viewer -G Ninja \
+  -DBUILD_TESTING=OFF \
+  -DNBODY_ENABLE_CUDA=OFF \
+  -DNBODY_BUILD_VIEWER=ON
+cmake --build build/viewer --target nbody_viewer
+```
+
+### Replay a completed simulation
+
+Pass the directory containing a run's `.nbsnap` files. Frames are ordered by
+their sequence number and loop at the selected rate; live-stream marker files
+are not required.
+
+For example, replay the archived simulation in the Desktop presentation folder
+at five frames per second:
+
+```bash
+./build/viewer/nbody_viewer \
+  --replay-dir "/Users/wedoi/Desktop/presentation" \
+  --replay-fps 5
+```
+
+If a directory contains snapshots from more than one run, the viewer selects
+the run associated with the newest snapshot and loops only that run.
+
+### Follow a live simulation
+
+Use `--stream-dir` with the local output directory used by
+`nbody_stream_client`:
+
+```bash
+./build/viewer/nbody_viewer --stream-dir received-frames
+```
+
+The viewer follows `.nbody-latest` while the simulation is active. When the
+launcher marks the stream as ended, it automatically loops the completed run.
+
+### Viewer flags
+
+| Flag | Default | Description |
+| --- | --- | --- |
+| `--replay-dir DIR`, `--replay-dir=DIR` | none | Loops the newest archived `.nbsnap` run found in `DIR`. |
+| `--stream-dir DIR`, `--stream-dir=DIR` | none | Follows completed snapshots downloaded into `DIR`, then replays the run when its stream ends. |
+| `-f FILE`, `--file FILE`, `--file=FILE` | `data/test_spiral.bin` | Displays one `.nbsnap` snapshot or one planar particle file. |
+| `--replay-fps FPS` | `30` | Sets completed-run playback speed. `FPS` must be positive. |
+| `--poll-ms MS` | `16` | Sets how often live-stream marker files are checked. `MS` must be positive. |
+| `--validate-only` | off | Loads and validates the selected file, or the newest frame in a selected directory, prints its metadata, and exits without opening a window. |
+| `-h`, `--help` | — | Prints the viewer's command-line help. |
+
+`--replay-dir`, `--stream-dir`, and `--file` are mutually exclusive. With none
+of them supplied, the viewer opens `data/test_spiral.bin`. Snapshot inputs may
+use either the original version-1 format or the typed version-2 format; planar
+particle files are also supported.
+
+### Viewer controls
+
+- Drag: rotate the system.
+- Two-finger scroll or arrow keys: pan; the bodies follow the gesture direction.
+- Pinch or `+`/`-`: zoom.
+- Click a body: follow that sampled particle across frames.
+- Escape: stop following the selected body.
+- `F`: fit the complete system in the window.
+- `R`: reset rotation.
+
+The title bar reports live or replay mode, the current and total simulation
+steps when available, simulated time, and displayed particle count.
+
 ## Headless cluster frame streaming
 
 The graphical output path consists of three pieces:
@@ -954,14 +1031,20 @@ The client defaults to `received-frames` in the project directory; the server
 defaults to `$SCRATCH/nbody-frames-$SLURM_JOB_ID` when those cluster variables
 are available.
 
-Each `.nbsnap` file is little-endian and contains a 72-byte header followed by
-interleaved float32 `x, y, z` values. The header contains the `NBSNAP01` magic,
-format version, sequence number, simulation step, simulated time, particle
-source/sample counts, scalar/component sizes, and payload byte count. Only
-positions are sent to keep graphical bandwidth at 12 bytes per sampled particle
-per frame; the simulator's full double-precision state is unchanged. Filenames
-include a unique run id, so an older offline backlog cannot be overwritten by a
-later simulation.
+Each `.nbsnap` file is little-endian and independently loadable. The current
+position-only writer uses a 72-byte version-1 header followed by interleaved
+float32 `x, y, z` values. The header contains the `NBSNAP01` magic, format
+version, sequence number, simulation step, simulated time, particle
+source/sample counts, scalar/component sizes, and payload byte count. This
+keeps graphical bandwidth at 12 bytes per sampled particle; the simulator's
+full double-precision state is unchanged.
+
+The frame reader and Metal viewer also accept typed version-2 snapshots. These
+use an 80-byte header that additionally records the total simulation step count
+and append one `uint8` particle type per sampled body after the position data.
+This is the format used by retained typed runs such as the Desktop presentation
+archive. Filenames include a unique run ID, so an older offline backlog cannot
+be overwritten by a later simulation.
 
 ## Tests
 
@@ -1016,25 +1099,6 @@ Compute Sanitizer is intentionally separate from the fast test run:
 tests/scripts/run_cuda_sanitizers.sh
 RUN_RACECHECK=1 tests/scripts/run_cuda_sanitizers.sh
 ```
-
-The macOS Metal viewer is a separate executable and never opens as a
-side effect of running tests:
-
-```bash
-cmake -S . -B build/viewer -G Ninja \
-  -DBUILD_TESTING=OFF \
-  -DNBODY_BUILD_VIEWER=ON
-cmake --build build/viewer --target nbody_viewer
-./build/viewer/nbody_viewer \
-  -f data/test_spiral.bin \
-  --step 0 \
-  --total-steps 128
-```
-
-Use the arrow keys to pan and Control+Plus/Control+Minus to zoom. A two-finger
-vertical scroll pans vertically with an intentionally mirrored up/down
-direction. The title bar displays `Step current/total`; when `--total-steps`
-is omitted, the unknown total is displayed as `?`.
 
 ## Generate Galaxy Data
 

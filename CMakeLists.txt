@@ -29,7 +29,7 @@
 #   cmake -S . -B build/viewer -DBUILD_TESTING=OFF \
 #     -DNBODY_BUILD_VIEWER=ON
 #   cmake --build build/viewer --target nbody_viewer
-#   ./build/viewer/nbody_viewer -f data/test_spiral.bin
+#   ./build/viewer/nbody_viewer --replay-dir received-frames
 #
 # Add "-G Ninja" to a configure command if Ninja is installed and desired.
 # Change an option by re-running the configure command with -DOPTION=ON/OFF.
@@ -195,9 +195,23 @@ endif()
 # and Apple frameworks are requested only when this target can actually build.
 if(APPLE AND NBODY_BUILD_VIEWER)
     enable_language(OBJCXX)
-    add_executable(nbody_viewer apps/viewer/main.mm)
+    add_executable(
+        nbody_viewer
+        apps/viewer/main.mm
+        src/streaming/frame.cpp)
     target_include_directories(nbody_viewer PRIVATE ${PROJECT_SOURCE_DIR}/src)
     target_compile_features(nbody_viewer PRIVATE cxx_std_23)
+    target_compile_definitions(
+        nbody_viewer
+        PRIVATE
+            NBODY_VIEWER_SHADER_PATH="${PROJECT_SOURCE_DIR}/apps/viewer/renderer.metal")
+    target_compile_options(
+        nbody_viewer
+        PRIVATE
+            -Wall
+            -Wextra
+            -Wpedantic
+            $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_link_libraries(
         nbody_viewer
         PRIVATE
