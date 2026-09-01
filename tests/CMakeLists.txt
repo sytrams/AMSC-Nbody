@@ -58,12 +58,40 @@ if(TARGET nbody::streaming)
         PROPERTIES
             LABELS "cpu-unit"
             TIMEOUT 30)
+
+    if(TARGET nbody_browser_viewer)
+        add_executable(
+            nbody_browser_frame_fixture_writer
+            support/write_browser_frame_fixture.cpp)
+        target_link_libraries(
+            nbody_browser_frame_fixture_writer
+            PRIVATE nbody::streaming)
+        set_target_properties(
+            nbody_browser_frame_fixture_writer
+            PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+    endif()
 endif()
 
 # The data tools depend on NumPy. Register their standard-library unittests
 # when both Python and that optional runtime dependency are available.
 find_package(Python3 COMPONENTS Interpreter QUIET)
 if(Python3_Interpreter_FOUND)
+    if(TARGET nbody_browser_viewer AND TARGET nbody_browser_frame_fixture_writer)
+        add_test(
+            NAME "cpu.BrowserViewerServerTest"
+            COMMAND
+                ${Python3_EXECUTABLE}
+                "${PROJECT_SOURCE_DIR}/tests/integration/cpu/browser_viewer_server_test.py"
+                "$<TARGET_FILE:nbody_browser_viewer>"
+                "$<TARGET_FILE:nbody_browser_frame_fixture_writer>"
+                "${PROJECT_SOURCE_DIR}/apps/browser_viewer/web")
+        set_tests_properties(
+            "cpu.BrowserViewerServerTest"
+            PROPERTIES
+                LABELS "cpu-integration"
+                TIMEOUT 30)
+    endif()
+
     execute_process(
         COMMAND ${Python3_EXECUTABLE} -c "import numpy"
         RESULT_VARIABLE nbody_numpy_import_status

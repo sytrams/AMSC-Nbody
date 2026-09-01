@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="theme-color" content="#05080b">
+    <meta
+      name="description"
+      content="Interactive browser playback for N-body simulation snapshots">
+    <title>N-body Observatory</title>
+    <link rel="stylesheet" href="/styles.css">
+  </head>
+  <body>
+    <main class="observatory" aria-label="N-body simulation viewer">
+      <canvas id="simulation-canvas" aria-label="Three-dimensional particle visualization"></canvas>
+
+      <header class="topbar glass-panel">
+        <div class="identity">
+          <span class="identity-mark" aria-hidden="true"></span>
+          <div>
+            <p class="eyebrow">N-body observatory</p>
+            <h1 id="run-title">Waiting for a simulation</h1>
+          </div>
+        </div>
+
+        <div class="run-state" aria-live="polite">
+          <span id="connection-dot" class="state-dot waiting" aria-hidden="true"></span>
+          <div>
+            <span id="mode-label">Connecting</span>
+            <small id="mode-detail">Inspecting the frame directory</small>
+          </div>
+        </div>
+      </header>
+
+      <aside class="telemetry glass-panel" aria-label="Simulation telemetry">
+        <p class="panel-label">Current frame</p>
+        <dl class="telemetry-grid">
+          <div>
+            <dt>Step</dt>
+            <dd id="step-value">—</dd>
+          </div>
+          <div>
+            <dt>Sim time</dt>
+            <dd id="time-value">—</dd>
+          </div>
+          <div>
+            <dt>Particles</dt>
+            <dd id="particle-value">—</dd>
+          </div>
+          <div>
+            <dt>Frames</dt>
+            <dd id="frame-value">0</dd>
+          </div>
+        </dl>
+
+        <div class="legend" aria-label="Particle type legend">
+          <p class="panel-label">Bodies</p>
+          <ul>
+            <li><span class="legend-dot star"></span>Stars</li>
+            <li><span class="legend-dot planet"></span>Planets</li>
+            <li><span class="legend-dot moon"></span>Moons</li>
+            <li><span class="legend-dot small-body"></span>Small bodies</li>
+          </ul>
+        </div>
+      </aside>
+
+      <aside class="interaction-help glass-panel" aria-label="Viewer controls">
+        <div class="help-heading">
+          <p class="panel-label">Navigate</p>
+          <button id="reset-camera" class="text-button" type="button">Reset view</button>
+        </div>
+        <dl>
+          <div><dt>Rotate</dt><dd>Drag</dd></div>
+          <div><dt>Shift focus</dt><dd>Shift + drag</dd></div>
+          <div><dt>Zoom</dt><dd>Ctrl + scroll · +/−</dd></div>
+          <div><dt>Pan</dt><dd>Scroll · arrow keys</dd></div>
+        </dl>
+      </aside>
+
+      <section class="transport glass-panel" aria-label="Playback controls">
+        <button id="play-toggle" class="play-button" type="button" aria-label="Pause playback">
+          <span id="play-symbol" aria-hidden="true">Ⅱ</span>
+        </button>
+
+        <div class="timeline-group">
+          <div class="timeline-copy">
+            <span id="timeline-label">Following the latest frame</span>
+            <span id="sequence-label">Frame —</span>
+          </div>
+          <input
+            id="timeline"
+            type="range"
+            min="0"
+            max="0"
+            value="0"
+            aria-label="Simulation frame">
+        </div>
+
+        <label class="speed-control">
+          <span>Loop speed</span>
+          <select id="playback-speed" aria-label="Loop playback speed">
+            <option value="0.5">0.5×</option>
+            <option value="1" selected>1×</option>
+            <option value="2">2×</option>
+            <option value="4">4×</option>
+          </select>
+        </label>
+      </section>
+
+      <section id="empty-state" class="empty-state glass-panel" aria-live="polite">
+        <span class="orbit-loader" aria-hidden="true"></span>
+        <p id="empty-title">Looking for frames</p>
+        <small id="empty-detail">Completed .nbsnap files will appear here automatically.</small>
+      </section>
+
+      <div id="error-banner" class="error-banner" role="alert" hidden></div>
+    </main>
+
+    <script src="/app.js" defer></script>
+  </body>
+</html>

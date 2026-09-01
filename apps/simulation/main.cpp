@@ -250,7 +250,8 @@ int main(int argc, char **argv) {
     const DeviceParticlesView mutableView = simulation.particles();
     const ConstDeviceParticlesView particlesView{
         mutableView.count, mutableView.mass, mutableView.x,  mutableView.y,
-        mutableView.z,     mutableView.vx,   mutableView.vy, mutableView.vz};
+        mutableView.z,     mutableView.vx,   mutableView.vy, mutableView.vz,
+        mutableView.type};
     const std::size_t particleCount = particlesView.count;
     std::unique_ptr<nbody::streaming::DeviceFrameWriter> deviceFrameWriter;
     if (frameSpool) {
@@ -288,6 +289,8 @@ int main(int argc, char **argv) {
     }
     if (frameSampler && lastCapturedStep != simulation.stepNumber())
       captureFrame(true);
+    if (frameSpool)
+      (void)frameSpool->markComplete();
     const auto finish = std::chrono::steady_clock::now();
     const std::chrono::duration<double> elapsed = finish - start;
 

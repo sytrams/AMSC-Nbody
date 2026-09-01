@@ -2,6 +2,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <vector>
 
 #include "particle.hpp"
 #include "streaming/frame.hpp"
@@ -28,7 +29,10 @@ public:
 private:
   ConstDeviceParticlesView particles_{};
   std::size_t sampleParticleCount_ = 0;
-  float *devicePositions_ = nullptr;
+  std::uint16_t *devicePositions_ = nullptr;
+  double *deviceBlockBounds_ = nullptr;
+  int *deviceInvalidPosition_ = nullptr;
+  std::vector<std::uint8_t> sampledTypes_;
 };
 
 } // namespace nbody::streaming

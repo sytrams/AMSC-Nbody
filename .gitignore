@@ -39,6 +39,8 @@ nbody-stream/
 nbody-frames/
 *.nbsnap
 *.nbsnap.part
+run-*.complete
+run-*.complete.part
 
 #vscode
 .vscode
