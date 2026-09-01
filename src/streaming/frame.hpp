@@ -1,38 +1,61 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <string>
+#include <vector>
 
 namespace nbody::streaming {
 
+inline constexpr std::uint32_t kLegacyFrameVersion = 1;
+inline constexpr std::uint32_t kLegacyTypedFrameVersion = 2;
+inline constexpr std::uint32_t kQuantizedFrameVersion = 2;
+inline constexpr std::uint32_t kFrameVersion = 3;
 inline constexpr std::size_t kLegacyFrameHeaderBytes = 72;
-inline constexpr std::size_t kFrameHeaderBytes = 80;
+inline constexpr std::size_t kLegacyTypedFrameHeaderBytes = 80;
+inline constexpr std::size_t kQuantizedFrameHeaderBytes = 120;
+inline constexpr std::size_t kFrameHeaderBytes = 128;
 inline constexpr std::size_t kPositionComponents = 3;
 inline constexpr std::size_t kFrameChunkParticles = 1024 * 1024;
+inline constexpr std::uint16_t kQuantizedPositionMaximum = 65535;
+
+struct PositionBounds {
+  std::array<double, kPositionComponents> minimum{};
+  std::array<double, kPositionComponents> maximum{};
+};
 
 struct FrameHeader {
-  std::uint32_t version = 2;
-  std::uint32_t headerBytes = kFrameHeaderBytes;
+  std::uint32_t version = kFrameVersion;
+  std::uint32_t headerBytes = static_cast<std::uint32_t>(kFrameHeaderBytes);
   std::uint64_t sequence = 0;
   std::uint64_t simulationStep = 0;
   double simulationTime = 0.0;
   std::uint64_t sourceParticleCount = 0;
   std::uint64_t particleCount = 0;
-  std::uint32_t scalarBytes = sizeof(float);
+  std::uint32_t scalarBytes = sizeof(std::uint16_t);
   std::uint32_t components = kPositionComponents;
   std::uint64_t payloadBytes = 0;
   std::uint64_t totalSteps = 0;
+  PositionBounds bounds{};
+  std::uint64_t particleTypeBytes = 0;
 };
 
-// The callback fills `count * 3` interleaved xyz floats beginning at the
-// requested particle offset. FrameSpool invokes it in bounded chunks so large
-// simulations do not need a second full-size host copy of every position.
+// Legacy version-1/2 writers remain available for archived Metal-viewer
+// fixtures and external consumers. New simulator output uses quantized v3.
 using PositionChunkReader =
     std::function<void(std::size_t offset, std::size_t count, float *xyz)>;
 
+// The callback fills `count * 3` interleaved, independently quantized xyz
+// values beginning at the requested particle offset. FrameSpool invokes it in
+// bounded chunks so large simulations need no second full-size host copy.
+using QuantizedPositionChunkReader = std::function<void(
+    std::size_t offset, std::size_t count, std::uint16_t *xyz)>;
+
+// Particle types use the stable values from particle_type.hpp. They are stored
+// after the position payload so every frame is independently renderable.
 using ParticleTypeChunkReader = std::function<void(
     std::size_t offset, std::size_t count, std::uint8_t *types)>;
 
@@ -73,6 +96,18 @@ public:
       const ParticleTypeChunkReader &typeReader,
       std::size_t sourceParticleCount = 0) const;
 
+  std::filesystem::path writeQuantizedPositions(
+      std::uint64_t sequence, std::uint64_t simulationStep,
+      double simulationTime, std::size_t particleCount,
+      const PositionBounds &bounds,
+      const QuantizedPositionChunkReader &reader,
+      std::size_t sourceParticleCount = 0,
+      const ParticleTypeChunkReader &typeReader = {}) const;
+
+  // Atomically publishes a marker after the final frame has been written. A
+  // viewer uses this to switch from following the newest frame to loop mode.
+  [[nodiscard]] std::filesystem::path markComplete() const;
+
 private:
   std::filesystem::path directory_;
   std::string sessionId_;
@@ -80,5 +115,15 @@ private:
 
 [[nodiscard]] FrameHeader
 readFrameHeader(const std::filesystem::path &framePath);
+
+// Returns interleaved float32 xyz values. Quantized version-2/3 payloads are
+// dequantized; archived version-1/typed-version-2 floats are copied.
+[[nodiscard]] std::vector<float>
+readFramePositions(const std::filesystem::path &framePath);
+
+// Returns one stable particle type per sampled particle. Older position-only
+// frames are represented as Unknown so consumers remain backward compatible.
+[[nodiscard]] std::vector<std::uint8_t>
+readFrameParticleTypes(const std::filesystem::path &framePath);
 
 } // namespace nbody::streaming

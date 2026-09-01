@@ -197,35 +197,10 @@ unpackPositions(const std::vector<float> &values,
 
 Snapshot loadStreamSnapshot(const fs::path &path) {
   const FrameHeader header = nbody::streaming::readFrameHeader(path);
-  if (header.particleCount >
-      std::numeric_limits<std::size_t>::max() / header.components)
-    throw std::runtime_error("Snapshot particle count is too large");
-
-  std::ifstream input(path, std::ios::binary);
-  if (!input)
-    throw std::runtime_error("Could not open snapshot: " + path.string());
-  input.seekg(static_cast<std::streamoff>(header.headerBytes),
-              std::ios::beg);
-  std::vector<float> values(static_cast<std::size_t>(header.particleCount) *
-                            header.components);
-  const auto positionBytes =
-      static_cast<std::streamsize>(values.size() * sizeof(float));
-  input.read(reinterpret_cast<char *>(values.data()), positionBytes);
-  if (input.gcount() != positionBytes)
-    throw std::runtime_error("Could not read snapshot positions: " +
-                             path.string());
-
-  std::vector<std::uint8_t> types(
-      static_cast<std::size_t>(header.particleCount),
-      static_cast<std::uint8_t>(ParticleType::Unknown));
-  if (header.version >= 2) {
-    input.read(reinterpret_cast<char *>(types.data()),
-               static_cast<std::streamsize>(types.size()));
-    if (input.gcount() != static_cast<std::streamsize>(types.size()) ||
-        !std::all_of(types.begin(), types.end(), isValidParticleType))
-      throw std::runtime_error(
-          "Could not read valid snapshot particle types: " + path.string());
-  }
+  const std::vector<float> values =
+      nbody::streaming::readFramePositions(path);
+  const std::vector<std::uint8_t> types =
+      nbody::streaming::readFrameParticleTypes(path);
   return {header, unpackPositions(values, types), path, true};
 }
 

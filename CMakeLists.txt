@@ -129,6 +129,19 @@ if(NBODY_BUILD_STREAMING)
         PRIVATE -Wall -Wextra -Wpedantic)
     set_target_properties(
         nbody_stream_client PROPERTIES CXX_SCAN_FOR_MODULES OFF)
+
+    add_executable(nbody_browser_viewer apps/browser_viewer/main.cpp)
+    target_link_libraries(nbody_browser_viewer PRIVATE nbody::streaming)
+    target_compile_features(nbody_browser_viewer PRIVATE cxx_std_23)
+    target_compile_options(
+        nbody_browser_viewer
+        PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_definitions(
+        nbody_browser_viewer
+        PRIVATE
+            NBODY_BROWSER_ASSET_DIR="${PROJECT_SOURCE_DIR}/apps/browser_viewer/web")
+    set_target_properties(
+        nbody_browser_viewer PROPERTIES CXX_SCAN_FOR_MODULES OFF)
 endif()
 
 # The particle loader is header-only. nbody::particle gives consumers a stable,

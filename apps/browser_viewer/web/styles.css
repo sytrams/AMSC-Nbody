@@ -1,0 +1,488 @@
+:root {
+  color-scheme: dark;
+  --bg: #05080b;
+  --panel: rgba(10, 16, 21, 0.78);
+  --panel-strong: rgba(8, 13, 17, 0.94);
+  --line: rgba(159, 184, 197, 0.18);
+  --line-bright: rgba(159, 184, 197, 0.34);
+  --text: #edf5f7;
+  --muted: #91a4ab;
+  --dim: #64777e;
+  --cyan: #79d7e7;
+  --green: #73d7a4;
+  --amber: #ffc96a;
+  --danger: #ff8a87;
+  --radius: 14px;
+  font-family: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-synthesis: none;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+  background: var(--bg);
+  color: var(--text);
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button,
+select,
+input[type="range"] {
+  accent-color: var(--cyan);
+}
+
+.observatory {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  min-height: 420px;
+  isolation: isolate;
+  background:
+    radial-gradient(circle at 50% 48%, rgba(27, 67, 77, 0.12), transparent 38%),
+    #05080b;
+}
+
+#simulation-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  cursor: grab;
+  touch-action: none;
+}
+
+#simulation-canvas.dragging {
+  cursor: grabbing;
+}
+
+.glass-panel {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  box-shadow: 0 18px 50px rgba(0, 0, 0, 0.24);
+  backdrop-filter: blur(18px) saturate(118%);
+  -webkit-backdrop-filter: blur(18px) saturate(118%);
+}
+
+.topbar {
+  position: absolute;
+  z-index: 4;
+  top: 18px;
+  left: 18px;
+  right: 18px;
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 12px 16px;
+}
+
+.identity,
+.run-state {
+  display: flex;
+  align-items: center;
+}
+
+.identity {
+  gap: 12px;
+  min-width: 0;
+}
+
+.identity-mark {
+  width: 34px;
+  height: 34px;
+  flex: 0 0 auto;
+  border: 1px solid rgba(121, 215, 231, 0.44);
+  border-radius: 50%;
+  background:
+    radial-gradient(circle, var(--text) 0 2px, transparent 3px),
+    radial-gradient(circle at 68% 31%, var(--cyan) 0 1px, transparent 2px),
+    radial-gradient(circle at 26% 73%, var(--amber) 0 1px, transparent 2px);
+  box-shadow: inset 0 0 18px rgba(121, 215, 231, 0.14);
+}
+
+.eyebrow,
+.panel-label {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.66rem;
+  font-weight: 680;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+h1 {
+  max-width: 54vw;
+  margin: 2px 0 0;
+  overflow: hidden;
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 580;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.run-state {
+  gap: 10px;
+  flex: 0 0 auto;
+  padding-left: 18px;
+  border-left: 1px solid var(--line);
+}
+
+.run-state > div {
+  display: grid;
+  gap: 2px;
+}
+
+.run-state span:not(.state-dot) {
+  font-size: 0.78rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.run-state small {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.state-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--dim);
+  box-shadow: 0 0 0 4px rgba(100, 119, 126, 0.12);
+}
+
+.state-dot.live {
+  background: var(--green);
+  box-shadow: 0 0 0 4px rgba(115, 215, 164, 0.13), 0 0 14px rgba(115, 215, 164, 0.48);
+}
+
+.state-dot.loop {
+  background: var(--amber);
+  box-shadow: 0 0 0 4px rgba(255, 201, 106, 0.13), 0 0 14px rgba(255, 201, 106, 0.4);
+}
+
+.telemetry,
+.interaction-help {
+  position: absolute;
+  z-index: 3;
+  top: 104px;
+  width: 216px;
+  padding: 16px;
+}
+
+.telemetry {
+  left: 18px;
+}
+
+.interaction-help {
+  right: 18px;
+}
+
+.telemetry-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 10px;
+  margin: 14px 0 0;
+}
+
+.telemetry-grid div,
+.interaction-help dl div {
+  min-width: 0;
+}
+
+.telemetry-grid dt,
+.interaction-help dt {
+  color: var(--dim);
+  font-size: 0.68rem;
+}
+
+.telemetry-grid dd {
+  margin: 3px 0 0;
+  overflow: hidden;
+  color: var(--text);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.83rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.legend {
+  margin-top: 18px;
+  padding-top: 15px;
+  border-top: 1px solid var(--line);
+}
+
+.legend ul {
+  display: grid;
+  gap: 9px;
+  margin: 12px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.legend li {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  color: var(--muted);
+  font-size: 0.72rem;
+}
+
+.legend-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  box-shadow: 0 0 8px currentColor;
+}
+
+.legend-dot.star { color: #ffd13f; background: #ffd13f; }
+.legend-dot.planet { color: #4099ff; background: #4099ff; }
+.legend-dot.moon { color: #c7d1e0; background: #c7d1e0; }
+.legend-dot.small-body { color: #b77a47; background: #b77a47; }
+
+.help-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.text-button {
+  padding: 0;
+  color: var(--cyan);
+  border: 0;
+  background: transparent;
+  cursor: pointer;
+  font-size: 0.68rem;
+}
+
+.text-button:hover,
+.text-button:focus-visible {
+  color: var(--text);
+}
+
+.interaction-help dl {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+}
+
+.interaction-help dl div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.interaction-help dd {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.68rem;
+  text-align: right;
+}
+
+.transport {
+  position: absolute;
+  z-index: 4;
+  right: 18px;
+  bottom: 18px;
+  left: 18px;
+  min-height: 68px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 16px;
+  padding: 12px 14px;
+}
+
+.play-button {
+  width: 40px;
+  height: 40px;
+  display: grid;
+  place-items: center;
+  color: #061015;
+  border: 0;
+  border-radius: 50%;
+  background: var(--text);
+  cursor: pointer;
+  font-weight: 800;
+}
+
+.play-button:hover,
+.play-button:focus-visible {
+  background: var(--cyan);
+}
+
+.play-button:disabled {
+  color: var(--dim);
+  background: rgba(145, 164, 171, 0.16);
+  cursor: default;
+}
+
+.timeline-group {
+  min-width: 0;
+}
+
+.timeline-copy {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 8px;
+  color: var(--muted);
+  font-size: 0.68rem;
+}
+
+#sequence-label {
+  flex: 0 0 auto;
+  color: var(--dim);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+}
+
+#timeline {
+  width: 100%;
+  height: 4px;
+  display: block;
+  cursor: pointer;
+}
+
+.speed-control {
+  display: grid;
+  gap: 5px;
+  color: var(--dim);
+  font-size: 0.64rem;
+}
+
+.speed-control select {
+  min-width: 78px;
+  padding: 6px 25px 6px 9px;
+  color: var(--text);
+  border: 1px solid var(--line-bright);
+  border-radius: 8px;
+  background: var(--panel-strong);
+}
+
+.empty-state {
+  position: absolute;
+  z-index: 2;
+  top: 50%;
+  left: 50%;
+  min-width: min(360px, calc(100vw - 48px));
+  display: grid;
+  justify-items: center;
+  padding: 28px;
+  transform: translate(-50%, -50%);
+  text-align: center;
+}
+
+.empty-state[hidden] {
+  display: none;
+}
+
+.empty-state p {
+  margin: 15px 0 5px;
+  font-size: 0.9rem;
+  font-weight: 650;
+}
+
+.empty-state small {
+  max-width: 270px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+
+.orbit-loader {
+  width: 32px;
+  height: 32px;
+  border: 1px solid rgba(121, 215, 231, 0.4);
+  border-radius: 50%;
+  animation: orbit 1.8s linear infinite;
+}
+
+.orbit-loader::after {
+  width: 6px;
+  height: 6px;
+  display: block;
+  margin: -3px auto 0;
+  border-radius: 50%;
+  background: var(--cyan);
+  box-shadow: 0 0 12px var(--cyan);
+  content: "";
+}
+
+.error-banner {
+  position: absolute;
+  z-index: 8;
+  top: 100px;
+  left: 50%;
+  max-width: min(680px, calc(100vw - 48px));
+  padding: 10px 14px;
+  transform: translateX(-50%);
+  color: #270707;
+  border-radius: 9px;
+  background: var(--danger);
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.3);
+  font-size: 0.75rem;
+}
+
+@keyframes orbit {
+  to { transform: rotate(360deg); }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+  }
+
+  .run-state small,
+  .interaction-help {
+    display: none;
+  }
+
+  .telemetry {
+    top: 92px;
+    left: 10px;
+    width: 176px;
+  }
+
+  .legend {
+    display: none;
+  }
+
+  .transport {
+    right: 10px;
+    bottom: 10px;
+    left: 10px;
+    grid-template-columns: auto 1fr;
+  }
+
+  .speed-control {
+    display: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .orbit-loader {
+    animation: none;
+  }
+}

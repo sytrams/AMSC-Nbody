@@ -250,7 +250,8 @@ int main(int argc, char **argv) {
     const DeviceParticlesView mutableView = simulation.particles();
     const ConstDeviceParticlesView particlesView{
         mutableView.count, mutableView.mass, mutableView.x,  mutableView.y,
-        mutableView.z,     mutableView.vx,   mutableView.vy, mutableView.vz};
+        mutableView.z,     mutableView.vx,   mutableView.vy, mutableView.vz,
+        mutableView.type};
     const std::size_t particleCount = particlesView.count;
     std::unique_ptr<nbody::streaming::DeviceFrameWriter> deviceFrameWriter;
     if (frameSpool) {
@@ -291,10 +292,16 @@ int main(int argc, char **argv) {
     }
     if (frameSampler && lastCapturedStep != simulation.stepNumber())
       captureFrame(true);
+    if (frameSpool)
+      (void)frameSpool->markComplete();
     const auto evolutionFinish = std::chrono::steady_clock::now();
-    const std::chrono::duration<double> evolutionElapsed = evolutionFinish - evolutionStart;
-    const std::chrono::duration<double> totalElapsed = evolutionFinish - initializationStart;
-    const double averageStepMilliseconds = 1000.0 * evolutionElapsed.count() / static_cast<double>(options.steps);
+    const std::chrono::duration<double> evolutionElapsed =
+        evolutionFinish - evolutionStart;
+    const std::chrono::duration<double> totalElapsed =
+        evolutionFinish - initializationStart;
+    const double averageStepMilliseconds =
+        1000.0 * evolutionElapsed.count() /
+        static_cast<double>(options.steps);
 
     std::cout << std::setprecision(17) << "Simulation complete\n"
               << "  steps: " << simulation.stepNumber() << '\n'

@@ -26,7 +26,8 @@ The final simulation pipeline includes:
 - CUDA integration and physical-accuracy tests;
 - Compute Sanitizer validation;
 - headless frame streaming for cluster execution;
-- a playback-capable Metal viewer for live and archived simulations.
+- a playback-capable Metal viewer for live and archived simulations;
+- a cluster-hosted browser viewer for live and completed frame directories.
 
 ---
 
@@ -931,6 +932,43 @@ particle files are also supported.
 The title bar reports live or replay mode, the current and total simulation
 steps when available, simulated time, and displayed particle count.
 
+## Cluster browser viewer
+
+`nbody_browser_viewer` serves an interactive WebGL 2 viewer from a cluster node
+without using a cluster GPU for rendering. It watches a simulator frame
+directory, displays the newest completed frame while the run is active, and
+automatically loops the run after the simulator publishes its completion
+marker. Particle types are rendered distinctly as stars, planets, moons,
+asteroids/small bodies, or legacy unknown bodies.
+
+Build and launch it with the convenience wrapper:
+
+```bash
+./scripts/run-browser-viewer.sh /shared/path/to/run-frames \
+  --bind 127.0.0.1 \
+  --port 8080
+```
+
+The process prints the browser URLs it can detect. On a cluster, keep the
+default loopback bind and forward the port over SSH:
+
+```bash
+ssh -N -L 8080:127.0.0.1:8080 user@cluster-node
+```
+
+Then open `http://127.0.0.1:8080` locally. Binding to `0.0.0.0` is also
+supported when the cluster network and firewall explicitly permit inbound
+connections, but the viewer has no built-in authentication.
+
+Browser controls mirror the native viewer: drag to orbit, Shift-drag or
+right-drag to shift the focus, arrow keys or vertical scrolling to pan,
+Control+scroll or Control+Plus/Minus to zoom, `R` to fit/reset the view, and
+Space/timeline/speed controls for completed-run playback.
+
+For retained browser playback, run the simulator with `--stream-dir` and
+without `--cluster`: the raw transfer server started by `--cluster` removes a
+frame after its download client acknowledges it.
+
 ## Headless cluster frame streaming
 
 The graphical output path consists of three pieces:
@@ -1031,20 +1069,21 @@ The client defaults to `received-frames` in the project directory; the server
 defaults to `$SCRATCH/nbody-frames-$SLURM_JOB_ID` when those cluster variables
 are available.
 
-Each `.nbsnap` file is little-endian and independently loadable. The current
-position-only writer uses a 72-byte version-1 header followed by interleaved
-float32 `x, y, z` values. The header contains the `NBSNAP01` magic, format
-version, sequence number, simulation step, simulated time, particle
-source/sample counts, scalar/component sizes, and payload byte count. This
-keeps graphical bandwidth at 12 bytes per sampled particle; the simulator's
-full double-precision state is unchanged.
+Each current `.nbsnap` is little-endian and independently loadable. Version 3
+uses a 128-byte header containing the `NBSNAP01` magic, frame and simulation
+sequence data, particle counts, payload metadata, and per-axis position bounds.
+Positions are interleaved quantized `uint16` values and are followed by one
+stable `uint8` particle type per sampled body. This reduces position bandwidth
+to six bytes per particle while leaving the simulator's double-precision state
+unchanged.
 
-The frame reader and Metal viewer also accept typed version-2 snapshots. These
-use an 80-byte header that additionally records the total simulation step count
-and append one `uint8` particle type per sampled body after the position data.
-This is the format used by retained typed runs such as the Desktop presentation
-archive. Filenames include a unique run ID, so an older offline backlog cannot
-be overwritten by a later simulation.
+The shared frame reader, Metal viewer, and browser viewer remain compatible
+with position-only version-1 float snapshots, archived typed version-2 float
+snapshots with 80-byte headers, and position-only quantized version-2 snapshots
+with 120-byte headers. Filenames include a unique run ID, so an older offline
+backlog cannot be overwritten by a later simulation. A successful simulator
+run atomically publishes `run-<id>.complete`, which tells the browser viewer to
+switch from newest-frame following to loop playback.
 
 ## Tests
 
