@@ -75,12 +75,19 @@ endif()
 find_program(NBODY_NODE_EXECUTABLE NAMES node)
 if(TARGET nbody_browser_viewer AND NBODY_NODE_EXECUTABLE)
     add_test(
+        NAME "cpu.BrowserCameraControlsTest"
+        COMMAND
+            ${NBODY_NODE_EXECUTABLE}
+            "${PROJECT_SOURCE_DIR}/tests/unit/javascript/browser_camera_controls_test.mjs"
+            "${PROJECT_SOURCE_DIR}/apps/browser_viewer/web/camera_controls.mjs")
+    add_test(
         NAME "cpu.BrowserFrameParserTest"
         COMMAND
             ${NBODY_NODE_EXECUTABLE}
             "${PROJECT_SOURCE_DIR}/tests/unit/javascript/browser_frame_parser_test.mjs"
             "${PROJECT_SOURCE_DIR}/apps/browser_viewer/web/frame_parser.mjs")
     set_tests_properties(
+        "cpu.BrowserCameraControlsTest"
         "cpu.BrowserFrameParserTest"
         PROPERTIES
             LABELS "cpu-unit"

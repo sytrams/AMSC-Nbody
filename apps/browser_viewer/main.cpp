@@ -573,6 +573,8 @@ void serveRequest(int descriptor, const ViewerConfig &config,
       {"/index.html", {"index.html", "text/html; charset=utf-8"}},
       {"/styles.css", {"styles.css", "text/css; charset=utf-8"}},
       {"/app.js", {"app.js", "text/javascript; charset=utf-8"}},
+      {"/camera_controls.mjs",
+       {"camera_controls.mjs", "text/javascript; charset=utf-8"}},
       {"/frame_parser.mjs",
        {"frame_parser.mjs", "text/javascript; charset=utf-8"}},
   };
@@ -638,7 +640,8 @@ void validateConfig(const ViewerConfig &config) {
                                 "directory: " +
                                 config.framesDirectory.string());
   for (const std::string_view asset :
-       {"index.html", "styles.css", "app.js", "frame_parser.mjs"}) {
+       {"index.html", "styles.css", "app.js", "camera_controls.mjs",
+        "frame_parser.mjs"}) {
     error.clear();
     if (!fs::is_regular_file(config.assetsDirectory / asset, error) || error)
       throw std::invalid_argument("Browser asset is missing: " +

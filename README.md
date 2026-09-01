@@ -1070,9 +1070,10 @@ while the viewer runs on a compute node. Check the viewer process, listener,
 compute hostname, and both sides of the `-L` mapping in that order.
 
 Browser controls mirror the native viewer: drag to orbit, Shift-drag or
-right-drag to shift the focus, arrow keys or vertical scrolling to pan,
-Control+scroll or Control+Plus/Minus to zoom, `R` to fit/reset the view, and
-Space/timeline/speed controls for completed-run playback.
+right-drag to shift the focus, arrow keys or horizontal/vertical two-finger
+scrolling to pan, Control+scroll or Control+Plus/Minus to zoom, `R` to
+fit/reset the view, and Space/timeline/speed controls for completed-run
+playback.
 
 ## Headless cluster frame streaming
 

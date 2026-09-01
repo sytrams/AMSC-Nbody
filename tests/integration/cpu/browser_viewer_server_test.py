@@ -82,6 +82,13 @@ def main() -> int:
             assert headers["Content-Type"].startswith("text/javascript")
             assert b"export function parseFrame" in parser_module
 
+            status, controls_module, headers = request(
+                f"{base_url}/camera_controls.mjs"
+            )
+            assert status == 200
+            assert headers["Content-Type"].startswith("text/javascript")
+            assert b"export function wheelPanDelta" in controls_module
+
             status, body, _ = request(f"{base_url}/api/frames")
             assert status == 200
             catalog = json.loads(body)

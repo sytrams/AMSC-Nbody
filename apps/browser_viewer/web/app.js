@@ -1,4 +1,5 @@
 import { parseFrame as parseFrameBuffer } from "./frame_parser.mjs";
+import { wheelPanDelta } from "./camera_controls.mjs";
 
 (() => {
   "use strict";
@@ -569,8 +570,12 @@ import { parseFrame as parseFrameBuffer } from "./frame_parser.mjs";
       if (event.ctrlKey || event.metaKey) {
         state.renderer.camera.zoomBy(Math.exp(-event.deltaY * 0.002));
       } else {
-        const gestureScale = event.deltaMode === WheelEvent.DOM_DELTA_PIXEL ? 1 : 12;
-        state.renderer.camera.panPixels(0, -event.deltaY * gestureScale, canvas.clientHeight);
+        const [deltaX, deltaY] = wheelPanDelta(
+          event.deltaX,
+          event.deltaY,
+          event.deltaMode,
+        );
+        state.renderer.camera.panPixels(deltaX, deltaY, canvas.clientHeight);
       }
     }, { passive: false });
 
